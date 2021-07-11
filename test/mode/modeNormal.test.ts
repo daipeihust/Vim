@@ -4,7 +4,7 @@ import { getAndUpdateModeHandler } from '../../extension';
 import { Mode } from '../../src/mode/mode';
 import { ModeHandler } from '../../src/mode/modeHandler';
 import { Configuration } from '../testConfiguration';
-import { newTest, newTestSkip } from '../testSimplifier';
+import { newTest } from '../testSimplifier';
 import { cleanUpWorkspace, setupWorkspace } from './../testUtils';
 
 suite('Mode Normal', () => {
@@ -602,6 +602,39 @@ suite('Mode Normal', () => {
     endMode: Mode.Insert,
   });
 
+  // TODO: these tests should be organanized and combined with the ones below - vi'c should be the same as ci', for instance
+  newTest({
+    title: "Can handle 'vi'c' on first quote",
+    start: ["one |'two' three"],
+    keysPressed: "vi'c",
+    end: ["one '|' three"],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "Can handle 'vi'c' inside quoted string",
+    start: ["one 't|wo' three"],
+    keysPressed: "vi'c",
+    end: ["one '|' three"],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "Can handle 'vi'c' on closing quote",
+    start: ["one 'two|' three"],
+    keysPressed: "vi'c",
+    end: ["one '|' three"],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "Can handle 'vi'c' when string is ahead",
+    start: ["on|e 'two' three"],
+    keysPressed: "vi'c",
+    end: ["one '|' three"],
+    endMode: Mode.Insert,
+  });
+
   newTest({
     title: "Can handle 'ci'' on first quote",
     start: ["|'one'"],
@@ -651,10 +684,26 @@ suite('Mode Normal', () => {
   });
 
   newTest({
+    title: "'ci\"' correctly matches quotes on line when starting on quote character",
+    start: ['one "two|" three "four"'],
+    keysPressed: 'ci"',
+    end: ['one "|" three "four"'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'ci\"' fails when starting on unmatched quote character",
+    start: ['one "two" three "four" five|" six'],
+    keysPressed: 'ci"',
+    end: ['one "two" three "four" five|" six'],
+    endMode: Mode.Normal,
+  });
+
+  newTest({
     title: "Can handle 'ca\"' starting behind the quoted word",
     start: ['|one "two"'],
     keysPressed: 'ca"',
-    end: ['one |'],
+    end: ['one|'],
     endMode: Mode.Insert,
   });
 
@@ -662,7 +711,55 @@ suite('Mode Normal', () => {
     title: "Can handle 'ca\"' starting on the opening quote",
     start: ['one |"two"'],
     keysPressed: 'ca"',
-    end: ['one |'],
+    end: ['one|'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'ca\"' includes trailing whitespace",
+    start: ['one "t|wo"            three'],
+    keysPressed: 'ca"',
+    end: ['one |three'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'ca\"' includes trailing whitespace 2",
+    start: ['one "t|wo"   ', 'three'],
+    keysPressed: 'ca"',
+    end: ['one |', 'three'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'ca\"' includes leading whitespace if there is no trailing whitespace",
+    start: ['one      "t|wo"three'],
+    keysPressed: 'ca"',
+    end: ['one|three'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'c2i\"' includes quotes, but not trailing whitespace",
+    start: ['one "t|wo"   ', 'three'],
+    keysPressed: 'c2i"',
+    end: ['one |   ', 'three'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'c2i\"' includes quotes, but not trailing whitespace 2",
+    start: ['one "t|wo"   ', 'three'],
+    keysPressed: 'c2i"',
+    end: ['one |   ', 'three'],
+    endMode: Mode.Insert,
+  });
+
+  newTest({
+    title: "'c2i\"' includes quotes, but not leading whitespace",
+    start: ['one      "t|wo"three'],
+    keysPressed: 'c2i"',
+    end: ['one      |three'],
     endMode: Mode.Insert,
   });
 
@@ -710,7 +807,7 @@ suite('Mode Normal', () => {
     title: "Can handle 'ca\"' starting on the closing quote",
     start: ['one "two|"'],
     keysPressed: 'ca"',
-    end: ['one |'],
+    end: ['one|'],
     endMode: Mode.Insert,
   });
 
@@ -742,7 +839,7 @@ suite('Mode Normal', () => {
     title: "Can handle 'ca`' inside word",
     start: ['one `t|wo`'],
     keysPressed: 'ca`',
-    end: ['one |'],
+    end: ['one|'],
     endMode: Mode.Insert,
   });
 
@@ -1393,54 +1490,85 @@ suite('Mode Normal', () => {
     end: ['one', 'tw|o'],
   });
 
-  newTest({
-    title: 'Can repeat w',
-    start: ['|one two three four'],
-    keysPressed: '2w',
-    end: ['one two |three four'],
+  suite('I', () => {
+    newTest({
+      title: 'I enters insert mode at start of line after any whitespace',
+      start: ['  on|e'],
+      keysPressed: 'I',
+      end: ['  |one'],
+      endMode: Mode.Insert,
+    });
+
+    newTest({
+      title: '[count]I',
+      start: ['  on|e'],
+      keysPressed: '2Itest<Esc>',
+      end: ['  testtes|tone'],
+    });
   });
 
-  newTest({
-    title: 'I works correctly',
-    start: ['|    one'],
-    keysPressed: 'Itest <Esc>',
-    end: ['    test| one'],
+  suite('gI', () => {
+    newTest({
+      title: 'gI enters insert mode at start of line',
+      start: ['    o|ne'],
+      keysPressed: 'gItest',
+      end: ['test|    one'],
+      endMode: Mode.Insert,
+    });
+
+    newTest({
+      title: '[count]gI',
+      start: ['    o|ne'],
+      keysPressed: '3gIab<Esc>',
+      end: ['ababa|b    one'],
+      endMode: Mode.Normal,
+    });
   });
 
-  newTest({
-    title: 'gI works correctly',
-    start: ['|    one'],
-    keysPressed: 'gItest<Esc>',
-    end: ['tes|t    one'],
-  });
+  suite('gi', () => {
+    newTest({
+      title: '`gi` enters insert mode at point of last insertion',
+      start: ['|'],
+      keysPressed: 'ione<Esc>otwo<Esc>0gi',
+      end: ['one', 'two|'],
+      endMode: Mode.Insert,
+    });
 
-  newTest({
-    title: '`gi` enters insert mode at point of last insertion',
-    start: ['|'],
-    keysPressed: 'ione<Esc>otwo<Esc>0gi',
-    end: ['one', 'two|'],
-    endMode: Mode.Insert,
-  });
+    newTest({
+      title: '`[count]gi`',
+      start: ['|'],
+      keysPressed: 'ione<Esc>otwo<Esc>03giab<Esc>',
+      end: ['one', 'twoababa|b'],
+      endMode: Mode.Normal,
+    });
 
-  // TODO: this gets messed up by test framework inserting start text, I think
-  newTestSkip({
-    title: "`gi` enters insert mode at start of document if there's no prior insertion",
-    start: ['one', 'two', 'thr|ee'],
-    keysPressed: 'gi',
-    end: ['|one', 'two', 'three'],
-    endMode: Mode.Insert,
+    newTest({
+      title: "`gi` enters insert mode at start of document if there's no prior insertion",
+      start: ['one', 'two', 'thr|ee'],
+      keysPressed: 'gi',
+      end: ['|one', 'two', 'three'],
+      endMode: Mode.Insert,
+    });
+
+    newTest({
+      title: '`gi` after (c)hange',
+      start: ['one |two three'],
+      keysPressed: 'cwab<Esc>0gi',
+      end: ['one ab| three'],
+      endMode: Mode.Insert,
+    });
   });
 
   newTest({
     title: '`. works correctly',
-    start: ['one|'],
+    start: ['on|e'],
     keysPressed: 'atwo<Esc>`.',
     end: ['one|two'],
   });
 
   newTest({
     title: "'. works correctly",
-    start: ['one|'],
+    start: ['on|e'],
     keysPressed: "atwo<Esc>'.",
     end: ['one|two'],
   });
@@ -1498,8 +1626,8 @@ suite('Mode Normal', () => {
     ],
     keysPressed: 'Vgq',
     end: [
-      '//    We choose to write a vim extension, not because it is easy, but because it is',
-      '|//    hard.',
+      '//    We choose to write a vim extension, not because it is easy, but because it',
+      '|//    is hard.',
     ],
   });
 
@@ -1602,6 +1730,65 @@ suite('Mode Normal', () => {
     start: ['|/* abc', ' */', '/* def', ' */'],
     keysPressed: 'gqG',
     end: ['|/* abc', ' */', '/* def', ' */'],
+  });
+
+  newTest({
+    title: 'gq leaves alone whitespace within a line',
+    start: ["|Good morning, how are you?  I'm Dr. Worm.", "I'm interested", 'in      things.'],
+    keysPressed: 'gqG',
+    end: ["|Good morning, how are you?  I'm Dr. Worm.  I'm interested in      things."],
+  });
+
+  newTest({
+    title: 'gq breaks at exactly textwidth',
+    start: [
+      '|1 3 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9x split',
+    ],
+    keysPressed: 'gqG',
+    end: [
+      '|1 3 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9x',
+      'split',
+    ],
+  });
+
+  newTest({
+    title: 'gq breaks before textwidth',
+    start: [
+      '|1 3 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9xs split',
+    ],
+    keysPressed: 'gqG',
+    end: [
+      '|1 3 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7',
+      '9xs split',
+    ],
+  });
+
+  newTest({
+    title: 'gq breaks at exactly textwidth with indent and comment',
+    start: [
+      '| // 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9xs split',
+    ],
+    keysPressed: 'gqG',
+    end: [
+      '| // 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9',
+      ' // 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7 9',
+      ' // 5 7 911 3 5 7 921 3 5 7 931 3 5 7 941 3 5 7 951 3 5 7 961 3 5 7 971 3 5 7',
+      ' // 9xs split',
+    ],
+  });
+
+  newTest({
+    title: 'gq breaks around long words',
+    start: [
+      '|this is a suuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuper long looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong                    word',
+    ],
+    keysPressed: 'gqG',
+    end: [
+      '|this is a',
+      'suuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuper',
+      'long looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong',
+      'word',
+    ],
   });
 
   newTest({
@@ -2920,11 +3107,11 @@ suite('Mode Normal', () => {
     });
 
     newTest({
-      title: 'cgn deletes the next word when cursor is at hello|',
-      start: ['|foo', 'hello world', 'hello', 'hello'],
-      keysPressed: '/hello\nelcgn',
-      end: ['foo', 'hello world', '|', 'hello'],
-      endMode: Mode.Insert,
+      title: '`cgn` can be repeated by dot',
+      start: ['|', 'one', 'two', 'one', 'three'],
+      keysPressed: '/one\n' + 'cgn' + 'XYZ' + '<Esc>' + '..',
+      end: ['', 'XYZ', 'two', 'XY|Z', 'three'],
+      endMode: Mode.Normal,
     });
   });
 

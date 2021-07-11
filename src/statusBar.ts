@@ -17,6 +17,8 @@ class StatusBarImpl implements vscode.Disposable {
   private previousMode: Mode | undefined = undefined;
   private showingDefaultMessage = true;
 
+  public lastMessageTime: Date | undefined;
+
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -65,6 +67,7 @@ class StatusBarImpl implements vscode.Disposable {
 
     this.previousMode = vimState.currentMode;
     this.showingDefaultMessage = false;
+    this.lastMessageTime = new Date();
   }
 
   public displayError(vimState: VimState, error: VimError) {
@@ -139,6 +142,7 @@ class StatusBarImpl implements vscode.Disposable {
 
     if (foreground !== undefined) {
       colorCustomizations['statusBar.foreground'] = foreground;
+      colorCustomizations['statusBar.debuggingForeground'] = foreground;
     }
 
     if (currentColorCustomizations !== colorCustomizations) {

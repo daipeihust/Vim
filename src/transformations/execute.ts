@@ -19,7 +19,7 @@ import { globalState } from '../state/globalState';
 import { RecordedState } from '../state/recordedState';
 import { TextEditor } from '../textEditor';
 import { reportSearch } from '../util/statusBarTextUtils';
-import { Range } from '../common/motion/range';
+import { Cursor } from '../common/motion/cursor';
 import { Position } from 'vscode';
 import { VimState } from '../state/vimState';
 import { Transformer } from './transformer';
@@ -65,19 +65,10 @@ export async function executeTransformations(
         edit.insert(command.position, command.text);
         break;
       case 'replaceText':
-        edit.replace(new vscode.Selection(command.range.start, command.range.stop), command.text);
-        break;
-      case 'deleteText':
-        const matchRange = PairMatcher.immediateMatchingBracket(vimState, command.position);
-        if (matchRange) {
-          edit.delete(matchRange);
-        }
-        edit.delete(
-          new vscode.Range(command.position, command.position.getLeftThroughLineBreaks())
-        );
+        edit.replace(command.range, command.text);
         break;
       case 'deleteRange':
-        edit.delete(new vscode.Selection(command.range.start, command.range.stop));
+        edit.delete(command.range);
         break;
       case 'moveCursor':
         break;
@@ -121,11 +112,26 @@ export async function executeTransformations(
        * (this is primarily necessary for multi-cursor mode, since most
        * actions will trigger at most one text operation).
        */
-      await vimState.editor.edit((edit) => {
-        for (const command of textTransformations) {
-          doTextEditorEdit(command, edit);
+      try {
+        await vimState.editor.edit((edit) => {
+          for (const command of textTransformations) {
+            doTextEditorEdit(command, edit);
+          }
+        });
+      } catch (e) {
+        // Messages like "TextEditor(vs.editor.ICodeEditor:1,$model8) has been disposed" can be ignored.
+        // They occur when the user switches to a new tab while an action is running.
+        if (e.name !== 'DISPOSED') {
+          e.context = {
+            currentMode: Mode[vimState.currentMode],
+            cursors: vimState.cursors.map((cursor) => cursor.toString()),
+            actionsRunPressedKeys: vimState.recordedState.actionsRunPressedKeys,
+            actionsRun: vimState.recordedState.actionsRun.map((action) => action.constructor.name),
+            textTransformations,
+          };
+          throw e;
         }
-      });
+      }
     }
   }
 
@@ -151,7 +157,15 @@ export async function executeTransformations(
     switch (transformation.type) {
       case 'insertTextVSCode':
         await TextEditor.insert(vimState.editor, transformation.text);
-        vimState.cursors[0] = Range.FromVSCodeSelection(vimState.editor.selection);
+        vimState.cursors[0] = Cursor.FromVSCodeSelection(vimState.editor.selection);
+        break;
+
+      case 'deleteLeft':
+        await vscode.commands.executeCommand('deleteLeft');
+        break;
+
+      case 'deleteRight':
+        await vscode.commands.executeCommand('deleteRight');
         break;
 
       case 'showCommandHistory':
@@ -276,7 +290,7 @@ export async function executeTransformations(
   }
 
   const selections = vimState.editor.selections.map((sel) => {
-    let range = Range.FromVSCodeSelection(sel);
+    let range = Cursor.FromVSCodeSelection(sel);
     if (range.start.isBefore(range.stop)) {
       range = range.withNewStop(range.stop.getLeftThroughLineBreaks(true));
     }
@@ -300,11 +314,11 @@ export async function executeTransformations(
 
       return diffs.reduce(
         (cursor, diff) =>
-          new Range(
+          new Cursor(
             cursor.start.add(vimState.document, diff),
             cursor.stop.add(vimState.document, diff)
           ),
-        Range.FromVSCodeSelection(sel)
+        Cursor.FromVSCodeSelection(sel)
       );
     });
 

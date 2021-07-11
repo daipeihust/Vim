@@ -3,6 +3,7 @@ interface IErrorMessage {
 }
 
 export enum ErrorCode {
+  InvalidAddress = 14,
   MarkNotSet = 20,
   NoAlternateFile = 23,
   NoInsertedTextYet = 29,
@@ -14,11 +15,13 @@ export enum ErrorCode {
   RecursiveMapping = 223,
   NoStringUnderCursor = 348,
   NothingInRegister = 353,
+  InvalidRegisterName = 354,
   SearchHitTop = 384,
   SearchHitBottom = 385,
   CannotCloseLastWindow = 444,
   ArgumentRequired = 471,
   InvalidArgument = 474,
+  NoRangeAllowed = 481,
   PatternNotFound = 486,
   TrailingCharacters = 488,
   NotAnEditorCommand = 492,
@@ -30,6 +33,7 @@ export enum ErrorCode {
 }
 
 export const ErrorMessage: IErrorMessage = {
+  14: 'Invalid address',
   20: 'Mark not set',
   23: 'No alternate file',
   29: 'No inserted text yet',
@@ -41,11 +45,13 @@ export const ErrorMessage: IErrorMessage = {
   223: 'Recursive mapping',
   348: 'No string under cursor',
   353: 'Nothing in register', // TODO: this needs an extra value ("Nothing in register x")
+  354: 'Invalid register name',
   384: 'Search hit TOP without match for',
   385: 'Search hit BOTTOM without match for',
   444: 'Cannot close last window',
   471: 'Argument required',
   474: 'Invalid argument',
+  481: 'No range allowed',
   486: 'Pattern not found',
   488: 'Trailing characters',
   492: 'Not an editor command',
@@ -58,7 +64,7 @@ export const ErrorMessage: IErrorMessage = {
 
 export class VimError extends Error {
   public readonly code: number;
-  public readonly message: string;
+  public override readonly message: string;
 
   private constructor(code: number, message: string) {
     super();
@@ -74,7 +80,7 @@ export class VimError extends Error {
     throw new Error('unknown error code: ' + code);
   }
 
-  toString(): string {
+  override toString(): string {
     return `E${this.code}: ${this.message}`;
   }
 }
