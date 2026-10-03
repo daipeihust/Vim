@@ -1,11 +1,10 @@
+import { HistoryBase } from 'platform/history';
 import { ExtensionContext } from 'vscode';
-import { Logger } from '../util/logger';
 import { configuration } from '../configuration/configuration';
 import { Globals } from '../globals';
-import { HistoryBase } from 'platform/history';
 
+// TODO(jfields): What's going on here? Just combine HistoryFile and HistoryBase...
 export class HistoryFile {
-  private readonly logger = Logger.get('HistoryFile');
   private base: HistoryBase;
 
   get historyFilePath(): string {
@@ -13,12 +12,7 @@ export class HistoryFile {
   }
 
   constructor(context: ExtensionContext, historyFileName: string) {
-    this.base = new HistoryBase(
-      context,
-      historyFileName,
-      Globals.extensionStoragePath,
-      this.logger
-    );
+    this.base = new HistoryBase(context, historyFileName, Globals.extensionStoragePath);
   }
 
   public async add(value: string | undefined): Promise<void> {

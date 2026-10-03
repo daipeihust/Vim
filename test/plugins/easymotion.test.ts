@@ -2,23 +2,19 @@ import {
   buildTriggerKeys,
   EasymotionTrigger,
 } from '../../src/actions/plugins/easymotion/easymotion.cmd';
-import { Configuration } from '../testConfiguration';
 import { newTest } from '../testSimplifier';
-import { cleanUpWorkspace, setupWorkspace } from './../testUtils';
+import { setupWorkspace } from './../testUtils';
 
 function easymotionCommand(trigger: EasymotionTrigger, searchWord: string, jumpKey: string) {
   return [...buildTriggerKeys(trigger), searchWord, jumpKey].join('');
 }
 
 suite('easymotion plugin', () => {
-  setup(async () => {
-    const configuration = new Configuration();
-    configuration.easymotion = true;
-
-    await setupWorkspace(configuration);
+  suiteSetup(async () => {
+    await setupWorkspace({
+      config: { easymotion: true },
+    });
   });
-
-  teardown(cleanUpWorkspace);
 
   newTest({
     title: 'Can handle s move',

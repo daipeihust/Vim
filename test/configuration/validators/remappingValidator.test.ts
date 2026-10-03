@@ -1,6 +1,6 @@
 import * as assert from 'assert';
-import { Configuration } from '../../testConfiguration';
 import { RemappingValidator } from '../../../src/configuration/validators/remappingValidator';
+import { Configuration } from '../../testConfiguration';
 
 suite('Remapping Validator', () => {
   test('no remappings', async () => {
@@ -62,7 +62,7 @@ suite('Remapping Validator', () => {
 
     assert.strictEqual(
       configuration.insertModeKeyBindingsMap.get('jj'),
-      configuration.insertModeKeyBindings[0]
+      configuration.insertModeKeyBindings[0],
     );
   });
 

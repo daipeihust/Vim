@@ -1,12 +1,13 @@
+import { Parser } from 'parsimmon';
 import * as vscode from 'vscode';
 
-import * as error from '../../error';
+import { VimError } from '../../error';
 import { VimState } from '../../state/vimState';
-import * as node from '../node';
+import { ExCommand } from '../../vimscript/exCommand';
+import { bangParser } from '../../vimscript/parserUtils';
 
-export interface IQuitCommandArguments extends node.ICommandArgs {
+export interface IQuitCommandArguments {
   bang?: boolean;
-  range?: node.LineRange;
   quitAll?: boolean;
 }
 
@@ -14,9 +15,19 @@ export interface IQuitCommandArguments extends node.ICommandArgs {
 //  Implements :quit
 //  http://vimdoc.sourceforge.net/htmldoc/editing.html#:quit
 //
-export class QuitCommand extends node.CommandBase {
-  public arguments: IQuitCommandArguments;
+export class QuitCommand extends ExCommand {
+  public static readonly argParser: (quitAll: boolean) => Parser<QuitCommand> = (
+    quitAll: boolean,
+  ) =>
+    bangParser.map(
+      (bang) =>
+        new QuitCommand({
+          bang,
+          quitAll,
+        }),
+    );
 
+  public arguments: IQuitCommandArguments;
   constructor(args: IQuitCommandArguments) {
     super();
     this.arguments = args;
@@ -32,11 +43,18 @@ export class QuitCommand extends node.CommandBase {
       !this.arguments.bang &&
       (!duplicatedInSplit || this.arguments.quitAll)
     ) {
-      throw error.VimError.fromCode(error.ErrorCode.NoWriteSinceLastChange);
+      throw VimError.NoWriteSinceLastChange();
     }
 
     if (this.arguments.quitAll) {
-      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      if (!this.arguments.bang) {
+        await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      } else {
+        const totalTabCount = vscode.window.tabGroups.all.flatMap((group) => group.tabs).length;
+        for (let i = 0; i < totalTabCount; i++) {
+          await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+        }
+      }
     } else {
       if (!this.arguments.bang) {
         await vscode.commands.executeCommand('workbench.action.closeActiveEditor');

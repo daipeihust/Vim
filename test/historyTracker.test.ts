@@ -1,9 +1,8 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
-import * as vscode from 'vscode';
-import { Position } from 'vscode';
+import vscode, { Position } from 'vscode';
 
-import { HistoryTracker, IMark } from '../src/history/historyTracker';
+import { HistoryTracker, ILocalMark, IMark } from '../src/history/historyTracker';
 import { Jump } from '../src/jumps/jump';
 import { globalState } from '../src/state/globalState';
 import { VimState } from '../src/state/vimState';
@@ -11,24 +10,19 @@ import { VimState } from '../src/state/vimState';
 suite('historyTracker unit tests', () => {
   let sandbox: sinon.SinonSandbox;
   let historyTracker: HistoryTracker;
-  let activeTextEditor: vscode.TextEditor;
+  const document = { fileName: 'file name' } as vscode.TextDocument;
 
-  const retrieveLocalMark = (markName: string): IMark | undefined =>
+  const retrieveLocalMark = (markName: string): ILocalMark | undefined =>
     historyTracker.getLocalMarks().find((mark) => mark.name === markName);
 
   const retrieveFileMark = (markName: string): IMark | undefined =>
     historyTracker.getGlobalMarks().find((mark) => mark.name === markName);
 
-  const setupVimState = () => (sandbox.createStubInstance(VimState) as unknown) as VimState;
+  const setupVimState = () => sandbox.createStubInstance(VimState) as unknown as VimState;
 
   const setupHistoryTracker = (vimState = setupVimState()) => new HistoryTracker(vimState);
 
-  const setupVSCode = () => {
-    activeTextEditor = sandbox.createStubInstance<vscode.TextEditor>(TextEditorStub);
-    sandbox.stub(vscode, 'window').value({ activeTextEditor });
-  };
-
-  const buildMockPosition = (): Position => sandbox.createStubInstance(Position) as any;
+  const buildMockPosition = (): Position => sandbox.createStubInstance(Position);
 
   setup(() => {
     sandbox = sinon.createSandbox();
@@ -40,7 +34,6 @@ suite('historyTracker unit tests', () => {
 
   suite('addMark', () => {
     setup(() => {
-      setupVSCode();
       historyTracker = setupHistoryTracker();
     });
 
@@ -48,12 +41,12 @@ suite('historyTracker unit tests', () => {
       const spy = sandbox.spy(globalState.jumpTracker, 'recordJump');
       const position = buildMockPosition();
       const mockJump = new Jump({
-        document: { fileName: 'file name' } as vscode.TextDocument,
+        document,
         position,
       });
       sandbox.stub(Jump, 'fromStateNow').returns(mockJump);
 
-      historyTracker.addMark(position, "'");
+      historyTracker.addMark(document, position, "'");
 
       sinon.assert.calledWith(spy, mockJump);
     });
@@ -61,37 +54,36 @@ suite('historyTracker unit tests', () => {
       const spy = sandbox.spy(globalState.jumpTracker, 'recordJump');
       const position = buildMockPosition();
       const mockJump = new Jump({
-        document: { fileName: 'file name' } as vscode.TextDocument,
+        document,
         position,
       });
       sandbox.stub(Jump, 'fromStateNow').returns(mockJump);
 
-      historyTracker.addMark(position, '`');
+      historyTracker.addMark(document, position, '`');
 
       sinon.assert.calledWith(spy, mockJump);
     });
 
     test('can create lowercase mark', () => {
       const position = buildMockPosition();
-      historyTracker.addMark(position, 'a');
+      historyTracker.addMark(document, position, 'a');
       const mark = retrieveLocalMark('a');
       assert.notStrictEqual(mark, undefined, 'failed to store lowercase mark');
       if (mark !== undefined) {
         assert.strictEqual(mark.position, position);
         assert.strictEqual(mark.isUppercaseMark, false);
-        assert.strictEqual(mark.editor, undefined);
       }
     });
 
     test('can create uppercase mark', () => {
       const position = buildMockPosition();
-      historyTracker.addMark(position, 'A');
+      historyTracker.addMark(document, position, 'A');
       const mark = retrieveFileMark('A');
       assert.notStrictEqual(mark, undefined, 'failed to store file mark');
       if (mark !== undefined) {
         assert.strictEqual(mark.position, position);
         assert.strictEqual(mark.isUppercaseMark, true);
-        assert.strictEqual(mark.editor, activeTextEditor);
+        assert.strictEqual(mark.document, document);
       }
     });
 
@@ -100,7 +92,7 @@ suite('historyTracker unit tests', () => {
       const firstHistoryTrackerInstance = historyTracker;
       const otherHistoryTrackerInstance = setupHistoryTracker(setupVimState());
       assert.notStrictEqual(firstHistoryTrackerInstance, otherHistoryTrackerInstance);
-      otherHistoryTrackerInstance.addMark(position, 'A');
+      otherHistoryTrackerInstance.addMark(document, position, 'A');
       const mark = retrieveFileMark('A');
       assert.notStrictEqual(mark, undefined);
       if (mark !== undefined) {
@@ -113,7 +105,7 @@ suite('historyTracker unit tests', () => {
       const firstHistoryTrackerInstance = historyTracker;
       const otherHistoryTrackerInstance = setupHistoryTracker(setupVimState());
       assert.notStrictEqual(firstHistoryTrackerInstance, otherHistoryTrackerInstance);
-      otherHistoryTrackerInstance.addMark(position, 'a');
+      otherHistoryTrackerInstance.addMark(document, position, 'a');
       const mark = retrieveLocalMark('a');
       assert.strictEqual(mark, undefined);
     });
@@ -121,14 +113,13 @@ suite('historyTracker unit tests', () => {
 
   suite('removeLocalMarks', () => {
     setup(() => {
-      setupVSCode();
       historyTracker = setupHistoryTracker();
     });
 
     test('removes only local marks', () => {
       const position = buildMockPosition();
-      historyTracker.addMark(position, 'a');
-      historyTracker.addMark(position, 'A');
+      historyTracker.addMark(document, position, 'a');
+      historyTracker.addMark(document, position, 'A');
       const mark = historyTracker.getMark('A');
 
       historyTracker.removeLocalMarks();
@@ -140,7 +131,6 @@ suite('historyTracker unit tests', () => {
 
   suite('removeMarks', () => {
     setup(() => {
-      setupVSCode();
       historyTracker = setupHistoryTracker();
     });
 
@@ -148,7 +138,7 @@ suite('historyTracker unit tests', () => {
       const position = buildMockPosition();
       const markTargets = 'AHZced'.split('');
 
-      markTargets.forEach((m) => historyTracker.addMark(position, m));
+      markTargets.forEach((m) => historyTracker.addMark(document, position, m));
 
       historyTracker.removeMarks(markTargets);
 
@@ -157,7 +147,7 @@ suite('historyTracker unit tests', () => {
 
     test("does not remove ''", () => {
       const position = buildMockPosition();
-      historyTracker.addMark(position, '');
+      historyTracker.addMark(document, position, '');
       const mark = historyTracker.getMark('');
 
       historyTracker.removeMarks(['']);
@@ -167,7 +157,7 @@ suite('historyTracker unit tests', () => {
 
     test('does nothing on empty', () => {
       const position = buildMockPosition();
-      historyTracker.addMark(position, 'a');
+      historyTracker.addMark(document, position, 'a');
       const mark = historyTracker.getMark('a');
 
       historyTracker.removeMarks([]);
@@ -177,38 +167,43 @@ suite('historyTracker unit tests', () => {
   });
 });
 
-// tslint:disable: no-empty
 class TextEditorStub implements vscode.TextEditor {
-  readonly document: vscode.TextDocument;
-  selection: vscode.Selection;
-  selections: vscode.Selection[];
-  readonly visibleRanges: vscode.Range[];
-  options: vscode.TextEditorOptions;
-  viewColumn?: vscode.ViewColumn;
+  readonly document!: vscode.TextDocument;
+  selection!: vscode.Selection;
+  selections!: vscode.Selection[];
+  readonly visibleRanges!: vscode.Range[];
+  options!: vscode.TextEditorOptions;
+  readonly viewColumn!: vscode.ViewColumn;
 
-  constructor() {}
+  constructor() {
+    // NoOp
+  }
   async edit(
     callback: (editBuilder: vscode.TextEditorEdit) => void,
-    options?: { undoStopBefore: boolean; undoStopAfter: boolean }
+    options?: { undoStopBefore: boolean; undoStopAfter: boolean },
   ) {
     return true;
   }
   async insertSnippet(
     snippet: vscode.SnippetString,
-    location?:
-      | vscode.Position
-      | vscode.Range
-      | ReadonlyArray<Position>
-      | ReadonlyArray<vscode.Range>,
-    options?: { undoStopBefore: boolean; undoStopAfter: boolean }
+    location?: vscode.Position | vscode.Range | readonly Position[] | readonly vscode.Range[],
+    options?: { undoStopBefore: boolean; undoStopAfter: boolean },
   ) {
     return true;
   }
   setDecorations(
     decorationType: vscode.TextEditorDecorationType,
-    rangesOrOptions: vscode.Range[] | vscode.DecorationOptions[]
-  ) {}
-  revealRange(range: vscode.Range, revealType?: vscode.TextEditorRevealType) {}
-  show(column?: vscode.ViewColumn) {}
-  hide() {}
+    rangesOrOptions: vscode.Range[] | vscode.DecorationOptions[],
+  ) {
+    // NoOp
+  }
+  revealRange(range: vscode.Range, revealType?: vscode.TextEditorRevealType) {
+    // NoOp
+  }
+  show(column?: vscode.ViewColumn) {
+    // NoOp
+  }
+  hide() {
+    // NoOp
+  }
 }

@@ -1,11 +1,14 @@
-import { window, QuickPickItem } from 'vscode';
+import { QuickPickItem, window } from 'vscode';
 
-import * as node from '../node';
-import { VimState } from '../../state/vimState';
+// eslint-disable-next-line id-denylist
+import { Parser, alt, noneOf, optWhitespace, regexp, seq, string, whitespace } from 'parsimmon';
+import { Position } from 'vscode';
+import { Cursor } from '../../common/motion/cursor';
+import { VimError } from '../../error';
 import { IMark } from '../../history/historyTracker';
-import { Range } from '../../common/motion/range';
-import { StatusBar } from '../../statusBar';
-import { ErrorCode, VimError } from '../../error';
+import { VimState } from '../../state/vimState';
+import { ExCommand } from '../../vimscript/exCommand';
+import { LineRange } from '../../vimscript/lineRange';
 
 class MarkQuickPickItem implements QuickPickItem {
   mark: IMark;
@@ -19,15 +22,23 @@ class MarkQuickPickItem implements QuickPickItem {
   constructor(vimState: VimState, mark: IMark) {
     this.mark = mark;
     this.label = mark.name;
-    this.description = vimState.document.lineAt(mark.position).text.trim();
+    if (mark.isUppercaseMark && mark.document !== vimState.document) {
+      this.description = mark.document.fileName;
+    } else {
+      this.description = vimState.document.lineAt(mark.position).text.trim();
+    }
     this.detail = `line ${mark.position.line} col ${mark.position.character}`;
   }
 }
 
-export class MarksCommand extends node.CommandBase {
-  private marksFilter?: string[];
+export class MarksCommand extends ExCommand {
+  public static readonly argParser: Parser<MarksCommand> = optWhitespace
+    .then(noneOf('|'))
+    .many()
+    .map((marks) => new MarksCommand(marks));
 
-  constructor(marksFilter?: string[]) {
+  private marksFilter: string[];
+  constructor(marksFilter: string[]) {
     super();
     this.marksFilter = marksFilter;
   }
@@ -36,7 +47,7 @@ export class MarksCommand extends node.CommandBase {
     const quickPickItems: MarkQuickPickItem[] = vimState.historyTracker
       .getMarks()
       .filter((mark) => {
-        return !this.marksFilter || this.marksFilter.includes(mark.name);
+        return this.marksFilter.length === 0 || this.marksFilter.includes(mark.name);
       })
       .map((mark) => new MarkQuickPickItem(vimState, mark));
 
@@ -45,96 +56,111 @@ export class MarksCommand extends node.CommandBase {
         canPickMany: false,
       });
       if (item) {
-        vimState.cursors = [new Range(item.mark.position, item.mark.position)];
+        vimState.cursors = [Cursor.atPosition(item.mark.position)];
       }
     } else {
-      window.showInformationMessage('No marks set');
+      void window.showInformationMessage('No marks set');
     }
   }
 }
 
-export class DeleteMarksCommand extends node.CommandBase {
-  private numbers = '0123456789';
-  private numberRange = /([0-9])-([0-9])/;
-  private letterRange = /([a-zA-Z])-([a-zA-Z])/;
-  private args?: string;
+type DeleteMarksArgs = Array<{ start: string; end: string } | string> | '!';
 
-  constructor(args?: string) {
+export class DeleteMarksCommand extends ExCommand {
+  public static readonly argParser: Parser<DeleteMarksCommand> = alt<DeleteMarksArgs>(
+    string('!'),
+    whitespace.then(
+      optWhitespace
+        .then(
+          alt<{ start: string; end: string } | string>(
+            seq(regexp(/[a-z]/).skip(string('-')), regexp(/[a-z]/)).map(([start, end]) => {
+              return { start, end };
+            }),
+            seq(regexp(/[A-Z]/).skip(string('-')), regexp(/[A-Z]/)).map(([start, end]) => {
+              return { start, end };
+            }),
+            seq(regexp(/[0-9]/).skip(string('-')), regexp(/[0-9]/)).map(([start, end]) => {
+              return { start, end };
+            }),
+            noneOf('-'),
+          ),
+        )
+        .many(),
+    ),
+  ).map((marks) => new DeleteMarksCommand(marks));
+
+  private args: DeleteMarksArgs;
+  constructor(args: DeleteMarksArgs) {
     super();
     this.args = args;
   }
 
-  range(start: number, end: number): number[] {
-    const range: number[] = [];
-    for (let i = start; i <= end; i++) {
-      range.push(i);
+  private static resolveMarkList(vimState: VimState, args: DeleteMarksArgs) {
+    const asciiRange = (start: string, end: string) => {
+      if (start > end) {
+        throw VimError.InvalidArgument474();
+      }
+
+      const [asciiStart, asciiEnd] = [start.charCodeAt(0), end.charCodeAt(0)];
+
+      const chars: string[] = [];
+      for (let ascii = asciiStart; ascii <= asciiEnd; ascii++) {
+        chars.push(String.fromCharCode(ascii));
+      }
+      return chars;
+    };
+
+    if (args === '!') {
+      // TODO: clear change list
+      return asciiRange('a', 'z');
     }
-    return range;
+
+    const marks: string[] = [];
+    for (const x of args) {
+      if (typeof x === 'string') {
+        marks.push(x);
+      } else {
+        const range = asciiRange(x.start, x.end);
+        if (range === undefined) {
+          throw VimError.InvalidArgument474();
+        }
+        marks.push(...range.concat());
+      }
+    }
+    return marks;
   }
 
   async execute(vimState: VimState): Promise<void> {
-    if (!this.args) {
-      StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.ArgumentRequired));
-      return;
-    }
+    const marks = DeleteMarksCommand.resolveMarkList(vimState, this.args);
+    vimState.historyTracker.removeMarks(marks);
+  }
+}
 
-    if (this.args === '!') {
-      vimState.historyTracker.removeLocalMarks();
-      return;
-    }
+export class MarkCommand extends ExCommand {
+  public static readonly argParser: Parser<MarkCommand> = seq(
+    optWhitespace,
+    regexp(/[a-zA-Z'`<>[\].]/).desc('mark name'),
+    optWhitespace,
+  ).map(([, markName]) => new MarkCommand(markName));
 
-    if (!this.args.includes('-')) {
-      vimState.historyTracker.removeMarks(this.args.split(''));
-      return;
-    }
-
-    const numberArgs = this.numberRange.exec(this.args);
-    let letterArgs = this.letterRange.exec(this.args);
-
-    if (!numberArgs && !letterArgs && this.args.includes('-')) {
-      StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.InvalidArgument));
-      return;
-    }
-
-    if (numberArgs && numberArgs.length > 2) {
-      if (parseInt(numberArgs[1], 10) > parseInt(numberArgs[2], 10)) {
-        StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.InvalidArgument));
-        return;
-      }
-
-      const start = this.numbers.indexOf(numberArgs[1]);
-      const end = this.numbers.indexOf(numberArgs[2]);
-      vimState.historyTracker.removeMarks(this.numbers.substring(start, end + 1).split(''));
-    }
-
-    while (letterArgs && letterArgs.length > 2) {
-      if (this.caseMismatch(letterArgs[1], letterArgs[2])) {
-        StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.InvalidArgument));
-        return;
-      }
-
-      const lowerCase = letterArgs[1] === letterArgs[1].toLowerCase();
-
-      const letters = lowerCase ? 'abcdefghijklmnopqrstuvwxyz' : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      const start = letters.indexOf(letterArgs[1]);
-      const end = letters.indexOf(letterArgs[2]);
-
-      if (start > end) {
-        StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.InvalidArgument));
-        return;
-      }
-
-      vimState.historyTracker.removeMarks(letters.substring(start, end + 1).split(''));
-
-      this.args = this.args.replace(letterArgs[0], '');
-      letterArgs = this.letterRange.exec(this.args);
-    }
+  private markName: string;
+  constructor(markName: string) {
+    super();
+    this.markName = markName;
   }
 
-  caseMismatch(a: string, b: string): boolean {
-    return (
-      (a.toLowerCase() === a && b !== b.toLowerCase()) ||
-      (b.toLowerCase() === b && a !== a.toLowerCase())
-    );
+  async execute(vimState: VimState): Promise<void> {
+    const position = vimState.cursorStopPosition;
+    vimState.historyTracker.addMark(vimState.document, position, this.markName);
+  }
+
+  override async executeWithRange(vimState: VimState, range: LineRange): Promise<void> {
+    /**
+     * When a range is specified, the mark is set at the last line of the range.
+     * For example, :1,5mark a will set mark 'a' at line 5.
+     */
+    const { end } = range.resolve(vimState);
+    const position = new Position(end, 0);
+    vimState.historyTracker.addMark(vimState.document, position, this.markName);
   }
 }

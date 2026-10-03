@@ -1,21 +1,24 @@
 import * as vscode from 'vscode';
 
-import { VimState } from '../../state/vimState';
+// eslint-disable-next-line id-denylist
+import { Parser, any, optWhitespace } from 'parsimmon';
+import { VimError } from '../../error';
 import { Register } from '../../register/register';
 import { RecordedState } from '../../state/recordedState';
-import * as node from '../node';
+import { VimState } from '../../state/vimState';
 import { StatusBar } from '../../statusBar';
-import { VimError, ErrorCode } from '../../error';
+import { ExCommand } from '../../vimscript/exCommand';
 
-export interface IRegisterCommandArguments extends node.ICommandArgs {
-  registers: string[];
-}
-export class RegisterCommand extends node.CommandBase {
-  private readonly arguments: IRegisterCommandArguments;
+export class RegisterCommand extends ExCommand {
+  public static readonly argParser: Parser<RegisterCommand> = optWhitespace.then(
+    // eslint-disable-next-line id-denylist
+    any.sepBy(optWhitespace).map((registers) => new RegisterCommand(registers)),
+  );
 
-  constructor(args: IRegisterCommandArguments) {
+  private readonly registers: string[];
+  constructor(registers: string[]) {
     super();
-    this.arguments = args;
+    this.registers = registers;
   }
 
   private async getRegisterDisplayValue(register: string): Promise<string | undefined> {
@@ -32,10 +35,10 @@ export class RegisterCommand extends node.CommandBase {
   async displayRegisterValue(vimState: VimState, register: string): Promise<void> {
     let result = await this.getRegisterDisplayValue(register);
     if (result === undefined) {
-      StatusBar.displayError(vimState, VimError.fromCode(ErrorCode.NothingInRegister));
+      StatusBar.displayError(vimState, VimError.NothingInRegister(register));
     } else {
       result = result.replace(/\n/g, '\\n');
-      vscode.window.showInformationMessage(`${register} ${result}`);
+      void vscode.window.showInformationMessage(`${register} ${result}`);
     }
   }
 
@@ -55,29 +58,30 @@ export class RegisterCommand extends node.CommandBase {
   }
 
   async execute(vimState: VimState): Promise<void> {
-    if (this.arguments.registers.length === 1) {
-      await this.displayRegisterValue(vimState, this.arguments.registers[0]);
+    if (this.registers.length === 1) {
+      await this.displayRegisterValue(vimState, this.registers[0]);
     } else {
       const currentRegisterKeys = Register.getKeys()
         .filter(
-          (reg) =>
-            reg !== '_' &&
-            (this.arguments.registers.length === 0 || this.arguments.registers.includes(reg))
+          (reg) => reg !== '_' && (this.registers.length === 0 || this.registers.includes(reg)),
         )
         .sort((reg1: string, reg2: string) => this.regSortOrder(reg1) - this.regSortOrder(reg2));
       const registerKeyAndContent = new Array<vscode.QuickPickItem>();
 
       for (const registerKey of currentRegisterKeys) {
-        registerKeyAndContent.push({
-          label: registerKey,
-          description: await this.getRegisterDisplayValue(registerKey),
-        });
+        const displayValue = await this.getRegisterDisplayValue(registerKey);
+        if (typeof displayValue === 'string') {
+          registerKeyAndContent.push({
+            label: registerKey,
+            description: displayValue,
+          });
+        }
       }
 
-      vscode.window.showQuickPick(registerKeyAndContent).then(async (val) => {
+      void vscode.window.showQuickPick(registerKeyAndContent).then(async (val) => {
         if (val) {
           const result = val.description;
-          vscode.window.showInformationMessage(`${val.label} ${result}`);
+          void vscode.window.showInformationMessage(`${val.label} ${result}`);
         }
       });
     }

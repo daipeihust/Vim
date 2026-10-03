@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
 
-import { configuration } from './../../../configuration/configuration';
-import { TextEditor } from './../../../textEditor';
-import { IEasyMotion, EasyMotionSearchAction, Marker, Match, SearchOptions } from './types';
-import { Mode } from '../../../mode/mode';
 import { Position } from 'vscode';
+import { Mode } from '../../../mode/mode';
+import { configuration } from './../../../configuration/configuration';
+import { EasyMotionSearchAction, IEasyMotion, Marker, Match, SearchOptions } from './types';
 
 export class EasyMotion implements IEasyMotion {
   /**
@@ -12,7 +11,8 @@ export class EasyMotion implements IEasyMotion {
    */
   public accumulation = '';
 
-  public searchAction: EasyMotionSearchAction;
+  // TODO: is this actually always set?
+  public searchAction!: EasyMotionSearchAction;
 
   /**
    * Array of all markers and decorations
@@ -22,9 +22,16 @@ export class EasyMotion implements IEasyMotion {
   private visibleMarkers: Marker[]; // Array of currently showing markers
   private decorations: vscode.DecorationOptions[][];
 
-  private static readonly fade = vscode.window.createTextEditorDecorationType({
-    color: configuration.easymotionDimColor,
-  });
+  private static fade: vscode.TextEditorDecorationType | null = null;
+  private static getFadeDecorationType(): vscode.TextEditorDecorationType {
+    if (this.fade === null) {
+      this.fade = vscode.window.createTextEditorDecorationType({
+        color: configuration.easymotionDimColor,
+      });
+    }
+    return this.fade;
+  }
+
   private static readonly hide = vscode.window.createTextEditorDecorationType({
     color: 'transparent',
   });
@@ -42,7 +49,8 @@ export class EasyMotion implements IEasyMotion {
   /**
    * Mode to return to after attempting easymotion
    */
-  public previousMode: Mode;
+  // TODO: make this optional (in some circumstances it isn't actually set)
+  public previousMode!: Mode;
 
   constructor() {
     this.markers = [];
@@ -55,7 +63,7 @@ export class EasyMotion implements IEasyMotion {
    */
   public static getDecorationType(
     length: number,
-    decorations?: vscode.DecorationRenderOptions
+    decorations?: vscode.DecorationRenderOptions,
   ): vscode.TextEditorDecorationType {
     const cache = this.decorationTypeCache[length];
     if (cache) {
@@ -77,7 +85,7 @@ export class EasyMotion implements IEasyMotion {
       editor.setDecorations(EasyMotion.getDecorationType(i), []);
     }
 
-    editor.setDecorations(EasyMotion.fade, []);
+    editor.setDecorations(EasyMotion.getFadeDecorationType(), []);
     editor.setDecorations(EasyMotion.hide, []);
   }
 
@@ -110,7 +118,7 @@ export class EasyMotion implements IEasyMotion {
     document: vscode.TextDocument,
     position: Position,
     search: string | RegExp = '',
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Match[] {
     const regex =
       typeof search === 'string'
@@ -166,15 +174,15 @@ export class EasyMotion implements IEasyMotion {
 
     // Sort by the index distance from the cursor index
     matches.sort((a: Match, b: Match): number => {
-      const absDiffA = computeAboluteDiff(a.index);
-      const absDiffB = computeAboluteDiff(b.index);
-      return absDiffA - absDiffB;
-
-      function computeAboluteDiff(matchIndex: number) {
+      const computeAboluteDiff = (matchIndex: number) => {
         const absDiff = Math.abs(cursorIndex - matchIndex);
         // Prioritize the matches on the right side of the cursor index
         return matchIndex < cursorIndex ? absDiff - 0.5 : absDiff;
-      }
+      };
+
+      const absDiffA = computeAboluteDiff(a.index);
+      const absDiffB = computeAboluteDiff(b.index);
+      return absDiffA - absDiffB;
     });
 
     return matches;
@@ -182,7 +190,7 @@ export class EasyMotion implements IEasyMotion {
 
   private getMarkerColor(
     customizedValue: string,
-    themeColorId: string
+    themeColorId: string,
   ): string | vscode.ThemeColor {
     if (customizedValue) {
       return customizedValue;
@@ -204,14 +212,14 @@ export class EasyMotion implements IEasyMotion {
   private getEasymotionMarkerForegroundColorTwoCharFirst() {
     return this.getMarkerColor(
       configuration.easymotionMarkerForegroundColorTwoCharFirst,
-      '#ffb400'
+      '#ffb400',
     );
   }
 
   private getEasymotionMarkerForegroundColorTwoCharSecond() {
     return this.getMarkerColor(
       configuration.easymotionMarkerForegroundColorTwoCharSecond,
-      '#b98300'
+      '#b98300',
     );
   }
 
@@ -251,7 +259,7 @@ export class EasyMotion implements IEasyMotion {
         this.decorations[keystroke.length] = [];
       }
 
-      //#region Hack (remove once backend handles this)
+      // #region Hack (remove once backend handles this)
 
       /*
         This hack is here because the backend for easy motion reports two adjacent
@@ -281,7 +289,7 @@ export class EasyMotion implements IEasyMotion {
         }
       }
 
-      //#endregion
+      // #endregion
 
       // First Char/One Char decoration
       const firstCharFontColor =
@@ -317,7 +325,7 @@ export class EasyMotion implements IEasyMotion {
           pos.line,
           pos.character + 1,
           pos.line,
-          pos.character + 1
+          pos.character + 1,
         );
 
         const secondCharRenderOptions: vscode.ThemableDecorationInstanceRenderOptions = {
@@ -341,7 +349,12 @@ export class EasyMotion implements IEasyMotion {
       }
 
       hiddenChars.push(
-        new vscode.Range(pos.line, pos.character, pos.line, pos.character + keystroke.length + trim)
+        new vscode.Range(
+          pos.line,
+          pos.character,
+          pos.line,
+          pos.character + keystroke.length + trim,
+        ),
       );
 
       if (configuration.easymotionDimBackground) {
@@ -358,10 +371,10 @@ export class EasyMotion implements IEasyMotion {
           });
         } else {
           const prevMarker = markers[markers.indexOf(marker) - 1];
-          const prevKeystroke = prevMarker.name.substr(this.accumulation.length);
+          const prevKeystroke = prevMarker.name.substring(this.accumulation.length);
           const prevDimPos = prevMarker.position;
           const offsetPrevDimPos = prevDimPos.withColumn(
-            prevDimPos.character + prevKeystroke.length
+            prevDimPos.character + prevKeystroke.length,
           );
 
           // Don't create dimming ranges in between consecutive markers (the 'after' is in the cases
@@ -375,7 +388,7 @@ export class EasyMotion implements IEasyMotion {
                 offsetPrevDimPos.line,
                 offsetPrevDimPos.character,
                 pos.line,
-                pos.character
+                pos.character,
               ),
               renderOptions: dimmingRenderOptions,
             });
@@ -387,18 +400,18 @@ export class EasyMotion implements IEasyMotion {
     }
 
     // for the last marker dim till document end
-    if (configuration.easymotionDimBackground) {
+    if (configuration.easymotionDimBackground && markers.length > 0) {
       const prevMarker = markers[markers.length - 1];
-      const prevKeystroke = prevMarker.name.substr(this.accumulation.length);
+      const prevKeystroke = prevMarker.name.substring(this.accumulation.length);
       const prevDimPos = dimmingZones[dimmingZones.length - 1].range.end;
       const offsetPrevDimPos = prevDimPos.withColumn(prevDimPos.character + prevKeystroke.length);
 
       // Don't create any more dimming ranges when the last marker is at document end
-      if (!offsetPrevDimPos.isEqual(TextEditor.getDocumentEnd(editor.document))) {
+      if (!offsetPrevDimPos.isAtDocumentEnd(editor.document)) {
         dimmingZones.push({
           range: new vscode.Range(
             offsetPrevDimPos,
-            new Position(editor.document.lineCount, Number.MAX_VALUE)
+            new Position(editor.document.lineCount, Number.MAX_VALUE),
           ),
           renderOptions: dimmingRenderOptions,
         });
@@ -414,7 +427,7 @@ export class EasyMotion implements IEasyMotion {
     editor.setDecorations(EasyMotion.hide, hiddenChars);
 
     if (configuration.easymotionDimBackground) {
-      editor.setDecorations(EasyMotion.fade, dimmingZones);
+      editor.setDecorations(EasyMotion.getFadeDecorationType(), dimmingZones);
     }
   }
 }

@@ -1,30 +1,33 @@
-import { Range } from '../common/motion/range';
-import { Mode } from '../mode/mode';
-import { RegisterMode } from '../register/register';
-import { VimState } from '../state/vimState';
-import { TextEditor } from '../textEditor';
+import { Position, TextDocument } from 'vscode';
 import { RegisterAction } from '../actions/base';
 import { BaseMovement, IMovement, failedMovement } from '../actions/baseMotion';
 import {
+  ExpandingSelection,
+  MoveAroundBacktick,
+  MoveAroundCurlyBrace,
   MoveAroundDoubleQuotes,
   MoveAroundParentheses,
   MoveAroundSingleQuotes,
   MoveAroundSquareBracket,
-  MoveAroundBacktick,
   MoveAroundTag,
-  ExpandingSelection,
-  MoveAroundCurlyBrace,
 } from '../actions/motion';
 import { ChangeOperator } from '../actions/operator';
+import { Cursor } from '../common/motion/cursor';
 import { configuration } from '../configuration/configuration';
+import { Mode } from '../mode/mode';
+import { RegisterMode } from '../register/register';
+import { VimState } from '../state/vimState';
+import { TextEditor } from '../textEditor';
 import { getCurrentParagraphBeginning, getCurrentParagraphEnd } from './paragraph';
-import { Position, TextDocument } from 'vscode';
 import { WordType } from './word';
 
-export abstract class TextObjectMovement extends BaseMovement {
-  modes = [Mode.Normal, Mode.Visual, Mode.VisualBlock];
+export abstract class TextObject extends BaseMovement {
+  override modes = [Mode.Normal, Mode.Visual, Mode.VisualBlock];
 
-  public async execActionForOperator(position: Position, vimState: VimState): Promise<IMovement> {
+  public override async execActionForOperator(
+    position: Position,
+    vimState: VimState,
+  ): Promise<IMovement> {
     const res = await this.execAction(position, vimState);
     // Since we need to handle leading spaces, we cannot use MoveWordBegin.execActionForOperator
     // In normal mode, the character on the stop position will be the first character after the operator executed
@@ -34,11 +37,11 @@ export abstract class TextObjectMovement extends BaseMovement {
     return res;
   }
 
-  public abstract execAction(position: Position, vimState: VimState): Promise<IMovement>;
+  public abstract override execAction(position: Position, vimState: VimState): Promise<IMovement>;
 }
 
 @RegisterAction
-export class SelectWord extends TextObjectMovement {
+export class SelectWord extends TextObject {
   keys = ['a', 'w'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -46,7 +49,10 @@ export class SelectWord extends TextObjectMovement {
     let stop: Position;
     const currentChar = TextEditor.getCharAt(vimState.document, position);
 
-    if (/\s/.test(currentChar)) {
+    if (currentChar === undefined) {
+      start = position;
+      stop = position.nextWordEnd(vimState.document);
+    } else if (/\s/.test(currentChar)) {
       start = position.prevWordEnd(vimState.document).getRight();
       stop = position.nextWordEnd(vimState.document);
     } else {
@@ -99,7 +105,7 @@ export class SelectWord extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectABigWord extends TextObjectMovement {
+export class SelectABigWord extends TextObject {
   keys = ['a', 'W'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -108,14 +114,17 @@ export class SelectABigWord extends TextObjectMovement {
 
     const currentChar = vimState.document.lineAt(position).text[position.character];
 
-    if (/\s/.test(currentChar)) {
+    if (currentChar === undefined) {
+      start = position;
+      stop = position.nextWordEnd(vimState.document);
+    } else if (/\s/.test(currentChar)) {
       start = position.prevWordEnd(vimState.document, { wordType: WordType.Big }).getRight();
       stop = position.nextWordEnd(vimState.document, { wordType: WordType.Big });
     } else {
       // Check 'aw' code for much of the reasoning behind this logic.
       const nextWord = position.nextWordStart(vimState.document, { wordType: WordType.Big });
       if (
-        (nextWord.line > position.line || nextWord.isAtDocumentEnd()) &&
+        (nextWord.line > position.line || nextWord.isAtDocumentEnd(vimState.document)) &&
         vimState.recordedState.count === 0
       ) {
         if (position.prevWordEnd(vimState.document, { wordType: WordType.Big }).isLineBeginning()) {
@@ -126,9 +135,9 @@ export class SelectABigWord extends TextObjectMovement {
         stop = position.getLineEnd();
       } else if (
         (nextWord.isEqual(
-          TextEditor.getFirstNonWhitespaceCharOnLine(vimState.document, nextWord.line)
+          TextEditor.getFirstNonWhitespaceCharOnLine(vimState.document, nextWord.line),
         ) ||
-          nextWord.isLineEnd()) &&
+          nextWord.isLineEnd(vimState.document)) &&
         vimState.recordedState.count === 0
       ) {
         start = position.prevWordEnd(vimState.document).getRight();
@@ -175,9 +184,14 @@ export class SelectABigWord extends TextObjectMovement {
 @RegisterAction
 export class SelectAnExpandingBlock extends ExpandingSelection {
   keys = ['a', 'f'];
-  modes = [Mode.Visual, Mode.VisualLine];
+  override modes = [Mode.Visual, Mode.VisualLine];
 
-  public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
+  public override async execAction(
+    position: Position,
+    vimState: VimState,
+    firstIteration: boolean,
+    lastIteration: boolean,
+  ): Promise<IMovement> {
     const blocks = [
       new MoveAroundDoubleQuotes(),
       new MoveAroundSingleQuotes(),
@@ -194,9 +208,9 @@ export class SelectAnExpandingBlock extends ExpandingSelection {
       const cursorPos = new Position(position.line, position.character);
       const cursorStartPos = new Position(
         vimState.cursorStartPosition.line,
-        vimState.cursorStartPosition.character
+        vimState.cursorStartPosition.character,
       );
-      ranges.push(await block.execAction(cursorPos, vimState));
+      ranges.push(await block.execAction(cursorPos, vimState, firstIteration, lastIteration));
       vimState.cursorStartPosition = cursorStartPos;
     }
 
@@ -204,19 +218,19 @@ export class SelectAnExpandingBlock extends ExpandingSelection {
       return !range.failed;
     });
 
-    let smallestRange: Range | undefined;
+    let smallestRange: Cursor | undefined;
 
     for (const iMotion of ranges) {
-      const currentSelectedRange = new Range(
+      const currentSelectedRange = new Cursor(
         vimState.cursorStartPosition,
-        vimState.cursorStopPosition
+        vimState.cursorStopPosition,
       );
       if (iMotion.failed) {
         continue;
       }
 
-      const range = new Range(iMotion.start, iMotion.stop);
-      let contender: Range | undefined;
+      const range = new Cursor(iMotion.start, iMotion.stop);
+      let contender: Cursor | undefined;
 
       if (
         range.start.isBefore(currentSelectedRange.start) &&
@@ -233,7 +247,7 @@ export class SelectAnExpandingBlock extends ExpandingSelection {
 
       if (contender) {
         const areTheyEqual =
-          contender.equals(new Range(vimState.cursorStartPosition, vimState.cursorStopPosition)) ||
+          contender.equals(new Cursor(vimState.cursorStartPosition, vimState.cursorStopPosition)) ||
           (vimState.currentMode === Mode.VisualLine &&
             contender.start.line === vimState.cursorStartPosition.line &&
             contender.stop.line === vimState.cursorStopPosition.line);
@@ -252,11 +266,11 @@ export class SelectAnExpandingBlock extends ExpandingSelection {
       // revert relevant state changes
       vimState.cursorStartPosition = new Position(
         smallestRange.start.line,
-        smallestRange.start.character
+        smallestRange.start.character,
       );
       vimState.cursorStopPosition = new Position(
         smallestRange.stop.line,
-        smallestRange.stop.character
+        smallestRange.stop.character,
       );
       vimState.recordedState.operatorPositionDiff = undefined;
       return {
@@ -268,8 +282,8 @@ export class SelectAnExpandingBlock extends ExpandingSelection {
 }
 
 @RegisterAction
-export class SelectInnerWord extends TextObjectMovement {
-  modes = [Mode.Normal, Mode.Visual];
+export class SelectInnerWord extends TextObject {
+  override modes = [Mode.Normal, Mode.Visual];
   keys = ['i', 'w'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -277,7 +291,10 @@ export class SelectInnerWord extends TextObjectMovement {
     let stop: Position;
     const currentChar = vimState.document.lineAt(position).text[position.character];
 
-    if (/\s/.test(currentChar)) {
+    if (currentChar === undefined) {
+      start = position;
+      stop = position.nextWordStart(vimState.document).getLeftThroughLineBreaks();
+    } else if (/\s/.test(currentChar)) {
       start = position.prevWordEnd(vimState.document).getRight();
       stop = position.nextWordStart(vimState.document).getLeftThroughLineBreaks();
     } else {
@@ -309,8 +326,8 @@ export class SelectInnerWord extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectInnerBigWord extends TextObjectMovement {
-  modes = [Mode.Normal, Mode.Visual];
+export class SelectInnerBigWord extends TextObject {
+  override modes = [Mode.Normal, Mode.Visual];
   keys = ['i', 'W'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -318,7 +335,10 @@ export class SelectInnerBigWord extends TextObjectMovement {
     let stop: Position;
     const currentChar = vimState.document.lineAt(position).text[position.character];
 
-    if (/\s/.test(currentChar)) {
+    if (currentChar === undefined) {
+      start = position;
+      stop = position.nextWordStart(vimState.document).getLeftThroughLineBreaks();
+    } else if (/\s/.test(currentChar)) {
       start = position.prevWordEnd(vimState.document, { wordType: WordType.Big }).getRight();
       stop = position.nextWordStart(vimState.document, { wordType: WordType.Big }).getLeft();
     } else {
@@ -356,7 +376,7 @@ export class SelectInnerBigWord extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectSentence extends TextObjectMovement {
+export class SelectSentence extends TextObject {
   keys = ['a', 's'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -413,7 +433,7 @@ export class SelectSentence extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectInnerSentence extends TextObjectMovement {
+export class SelectInnerSentence extends TextObject {
   keys = ['i', 's'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -456,7 +476,7 @@ export class SelectInnerSentence extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectParagraph extends TextObjectMovement {
+export class SelectParagraph extends TextObject {
   keys = ['a', 'p'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -469,7 +489,10 @@ export class SelectParagraph extends TextObjectMovement {
       // The cursor is at an empty line, it can be both the start of next paragraph and the end of previous paragraph
       start = getCurrentParagraphEnd(getCurrentParagraphBeginning(position, true), true);
     } else {
-      if (currentParagraphBegin.isLineBeginning() && currentParagraphBegin.isLineEnd()) {
+      if (
+        currentParagraphBegin.isLineBeginning() &&
+        currentParagraphBegin.isLineEnd(vimState.document)
+      ) {
         start = currentParagraphBegin.getRightThroughLineBreaks();
       } else {
         start = currentParagraphBegin;
@@ -493,7 +516,7 @@ export class SelectParagraph extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectInnerParagraph extends TextObjectMovement {
+export class SelectInnerParagraph extends TextObject {
   keys = ['i', 'p'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -538,19 +561,17 @@ export class SelectInnerParagraph extends TextObjectMovement {
 }
 
 @RegisterAction
-export class SelectEntire extends TextObjectMovement {
+export class SelectEntire extends TextObject {
   keys = ['a', 'e'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
-    return {
-      start: TextEditor.getDocumentBegin(),
-      stop: TextEditor.getDocumentEnd(vimState.document),
-    };
+    const range = TextEditor.getDocumentRange(vimState.document);
+    return { start: range.start, stop: range.end };
   }
 }
 
 @RegisterAction
-export class SelectEntireIgnoringLeadingTrailing extends TextObjectMovement {
+export class SelectEntireIgnoringLeadingTrailing extends TextObject {
   keys = ['i', 'e'];
 
   public async execAction(position: Position, vimState: VimState): Promise<IMovement> {
@@ -573,9 +594,7 @@ export class SelectEntireIgnoringLeadingTrailing extends TextObjectMovement {
   }
 }
 
-abstract class IndentObjectMatch extends TextObjectMovement {
-  setsDesiredColumnToEOL = true;
-
+abstract class IndentObjectMatch extends TextObject {
   protected includeLineAbove = false;
   protected includeLineBelow = false;
 
@@ -589,13 +608,13 @@ abstract class IndentObjectMatch extends TextObjectMovement {
       vimState.document,
       firstValidLineNumber,
       cursorIndent,
-      -1
+      -1,
     );
     let endLineNumber = IndentObjectMatch.findRangeStartOrEnd(
       vimState.document,
       firstValidLineNumber,
       cursorIndent,
-      1
+      1,
     );
 
     // Adjust the start line as needed.
@@ -626,7 +645,11 @@ abstract class IndentObjectMatch extends TextObjectMovement {
     // care about here since it just means this text object wouldn't work on a
     // single-line document.
     let endCharacter: number;
-    if (endLineNumber === vimState.document.lineCount - 1 || vimState.currentMode === Mode.Visual) {
+    if (
+      endLineNumber === vimState.document.lineCount - 1 ||
+      vimState.currentMode === Mode.Visual ||
+      vimState.currentMode === Mode.VisualLine
+    ) {
       endCharacter = TextEditor.getLineLength(endLineNumber);
     } else {
       endCharacter = 0;
@@ -638,7 +661,10 @@ abstract class IndentObjectMatch extends TextObjectMovement {
     };
   }
 
-  public async execActionForOperator(position: Position, vimState: VimState): Promise<IMovement> {
+  public override async execActionForOperator(
+    position: Position,
+    vimState: VimState,
+  ): Promise<IMovement> {
     return this.execAction(position, vimState);
   }
 
@@ -662,7 +688,7 @@ abstract class IndentObjectMatch extends TextObjectMovement {
     document: TextDocument,
     startIndex: number,
     cursorIndent: number,
-    step: -1 | 1
+    step: -1 | 1,
   ): number {
     let i = startIndex;
     let ret = startIndex;
@@ -684,23 +710,26 @@ abstract class IndentObjectMatch extends TextObjectMovement {
 @RegisterAction
 class InsideIndentObject extends IndentObjectMatch {
   keys = ['i', 'i'];
+  override modes = [Mode.Normal, Mode.Visual, Mode.VisualLine, Mode.VisualBlock];
 }
 
 @RegisterAction
 class InsideIndentObjectAbove extends IndentObjectMatch {
   keys = ['a', 'i'];
-  includeLineAbove = true;
+  override modes = [Mode.Normal, Mode.Visual, Mode.VisualLine, Mode.VisualBlock];
+  override includeLineAbove = true;
 }
 
 @RegisterAction
 class InsideIndentObjectBoth extends IndentObjectMatch {
   keys = ['a', 'I'];
-  includeLineAbove = true;
-  includeLineBelow = true;
+  override modes = [Mode.Normal, Mode.Visual, Mode.VisualLine, Mode.VisualBlock];
+  override includeLineAbove = true;
+  override includeLineBelow = true;
 }
 
-abstract class SelectArgument extends TextObjectMovement {
-  modes = [Mode.Normal, Mode.Visual];
+abstract class SelectArgument extends TextObject {
+  override modes = [Mode.Normal, Mode.Visual];
 
   private static openingDelimiterCharacters(): string[] {
     return configuration.argumentObjectOpeningDelimiters;
@@ -766,12 +795,12 @@ abstract class SelectArgument extends TextObjectMovement {
       SelectInnerArgument.findLeftArgumentBoundary(
         vimState.document,
         leftSearchStartPosition,
-        true
+        true,
       ) === undefined ||
       SelectInnerArgument.findRightArgumentBoundary(
         vimState.document,
         rightSearchStartPosition,
-        true
+        true,
       ) === undefined
     ) {
       return failure;
@@ -779,7 +808,7 @@ abstract class SelectArgument extends TextObjectMovement {
 
     const leftArgumentBoundary = SelectInnerArgument.findLeftArgumentBoundary(
       vimState.document,
-      leftSearchStartPosition
+      leftSearchStartPosition,
     );
     if (leftArgumentBoundary === undefined) {
       return failure;
@@ -787,7 +816,7 @@ abstract class SelectArgument extends TextObjectMovement {
 
     const rightArgumentBoundary = SelectInnerArgument.findRightArgumentBoundary(
       vimState.document,
-      rightSearchStartPosition
+      rightSearchStartPosition,
     );
     if (rightArgumentBoundary === undefined) {
       return failure;
@@ -798,10 +827,10 @@ abstract class SelectArgument extends TextObjectMovement {
 
     if (this.selectAround) {
       const isLeftOnOpening: boolean = SelectArgument.openingDelimiterCharacters().includes(
-        TextEditor.getCharAt(vimState.document, leftArgumentBoundary)
+        TextEditor.getCharAt(vimState.document, leftArgumentBoundary),
       );
       const isRightOnClosing: boolean = SelectArgument.closingDelimiterCharacters().includes(
-        TextEditor.getCharAt(vimState.document, rightArgumentBoundary)
+        TextEditor.getCharAt(vimState.document, rightArgumentBoundary),
       );
 
       // Edge-case:
@@ -873,7 +902,7 @@ abstract class SelectArgument extends TextObjectMovement {
   private static findLeftArgumentBoundary(
     document: TextDocument,
     position: Position,
-    ignoreSeparators: boolean = false
+    ignoreSeparators: boolean = false,
   ): Position | undefined {
     let delimiterPosition: Position | undefined;
     let walkingPosition = position;
@@ -914,7 +943,7 @@ abstract class SelectArgument extends TextObjectMovement {
   private static findRightArgumentBoundary(
     document: TextDocument,
     position: Position,
-    ignoreSeparators: boolean = false
+    ignoreSeparators: boolean = false,
   ): Position | undefined {
     let delimiterPosition: Position | undefined;
     let walkingPosition = position;
@@ -940,7 +969,7 @@ abstract class SelectArgument extends TextObjectMovement {
         openedParensCount--;
       }
 
-      if (walkingPosition.isAtDocumentEnd()) {
+      if (walkingPosition.isAtDocumentEnd(document)) {
         break;
       }
 
@@ -955,13 +984,13 @@ abstract class SelectArgument extends TextObjectMovement {
 
 @RegisterAction
 export class SelectInnerArgument extends SelectArgument {
-  modes = [Mode.Normal, Mode.Visual];
+  override modes = [Mode.Normal, Mode.Visual];
   keys = ['i', 'a'];
 }
 
 @RegisterAction
 export class SelectAroundArgument extends SelectArgument {
-  modes = [Mode.Normal, Mode.Visual];
+  override modes = [Mode.Normal, Mode.Visual];
   keys = ['a', 'a'];
-  selectAround = true;
+  override selectAround = true;
 }

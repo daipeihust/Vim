@@ -1,22 +1,20 @@
 import * as _ from 'lodash';
-import * as fs from 'platform/fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as fs from 'platform/fs';
 import * as vscode from 'vscode';
+import { window } from 'vscode';
+import { Logger } from '../util/logger';
 import { IConfiguration, IVimrcKeyRemapping } from './iconfiguration';
 import { vimrcKeyRemappingBuilder } from './vimrcKeyRemappingBuilder';
-import { window } from 'vscode';
-import { configuration } from './configuration';
-import { Logger } from '../util/logger';
 
 export class VimrcImpl {
-  private _vimrcPath: string;
-  private static readonly logger = Logger.get('VimRC');
+  private _vimrcPath?: string;
 
   /**
    * Fully resolved path to the user's .vimrc
    */
-  public get vimrcPath(): string {
+  public get vimrcPath(): string | undefined {
     return this._vimrcPath;
   }
 
@@ -39,17 +37,17 @@ export class VimrcImpl {
       const vscodeCommands = await vscode.commands.getCommands();
       const lines = (await fs.readFileAsync(configPath, 'utf8')).split(/\r?\n/);
       for (const line of lines) {
-        if (line.trimLeft().startsWith('"')) {
+        if (line.trimStart().startsWith('"')) {
           continue;
         }
 
         const source = this.buildSource(line);
         if (source) {
           if (!(await fs.existsAsync(source))) {
-            VimrcImpl.logger.warn(`Unable to find "${source}" file for configuration.`);
+            Logger.warn(`Unable to find "${source}" file for configuration.`);
             continue;
           }
-          VimrcImpl.logger.debug(`Loading "${source}" file for configuration.`);
+          Logger.debug(`Loading "${source}" file for configuration.`);
           await VimrcImpl.loadConfig(config, source);
           continue;
         }
@@ -70,7 +68,7 @@ export class VimrcImpl {
         }
       }
     } catch (err) {
-      window.showWarningMessage(`vimrc file "${configPath}" is broken, err=${err}`);
+      void window.showWarningMessage(`vimrc file "${configPath}" is broken, err=${err}`);
     }
   }
 
@@ -79,11 +77,11 @@ export class VimrcImpl {
       ? VimrcImpl.expandHome(config.vimrc.path)
       : await VimrcImpl.findDefaultVimrc();
     if (!_path) {
-      await window.showWarningMessage('No .vimrc found. Please set `vim.vimrc.path.`');
+      await window.showWarningMessage('No .vimrc found. Please set `vim.vimrc.path`.');
       return;
     }
     if (!(await fs.existsAsync(_path))) {
-      window
+      void window
         .showWarningMessage(`No .vimrc found at ${_path}.`, 'Create it')
         .then(async (choice: string | undefined) => {
           if (choice === 'Create it') {
@@ -92,7 +90,13 @@ export class VimrcImpl {
             });
             if (newVimrc) {
               await fs.writeFileAsync(newVimrc.fsPath, '', 'utf-8');
-              configuration.getConfiguration('vim').update('vimrc.path', newVimrc.fsPath, true);
+              const document = vscode.window.activeTextEditor?.document;
+              const resource = document
+                ? { uri: document.uri, languageId: document.languageId }
+                : undefined;
+              void vscode.workspace
+                .getConfiguration('vim', resource)
+                .update('vimrc.path', newVimrc.fsPath, true);
               await vscode.workspace.openTextDocument(newVimrc);
               // TODO: add some sample remaps/settings in here?
               await vscode.window.showTextDocument(newVimrc);
@@ -223,9 +227,7 @@ export class VimrcImpl {
             config.commandLineModeKeyBindingsNonRecursive,
           ];
         default:
-          VimrcImpl.logger.warn(
-            `Encountered an unrecognized mapping type: '${remap.keyRemappingType}'`
-          );
+          Logger.warn(`Encountered an unrecognized mapping type: '${remap.keyRemappingType}'`);
           return undefined;
       }
     })();
@@ -307,9 +309,7 @@ export class VimrcImpl {
             config.commandLineModeKeyBindingsNonRecursive,
           ];
         default:
-          VimrcImpl.logger.warn(
-            `Encountered an unrecognized unmapping type: '${remap.keyRemappingType}'`
-          );
+          Logger.warn(`Encountered an unrecognized unmapping type: '${remap.keyRemappingType}'`);
           return undefined;
       }
     })();
@@ -319,7 +319,7 @@ export class VimrcImpl {
         // Don't remove a mapping present in settings.json; those are more specific to VSCodeVim.
         _.remove(
           remaps,
-          (r) => r.source === 'vimrc' && _.isEqual(r.before, remap.keyRemapping.before)
+          (r) => r.source === 'vimrc' && _.isEqual(r.before, remap.keyRemapping.before),
         );
       });
       return true;
@@ -401,9 +401,7 @@ export class VimrcImpl {
             config.commandLineModeKeyBindingsNonRecursive,
           ];
         default:
-          VimrcImpl.logger.warn(
-            `Encountered an unrecognized clearMapping type: '${remap.keyRemappingType}'`
-          );
+          Logger.warn(`Encountered an unrecognized clearMapping type: '${remap.keyRemappingType}'`);
           return undefined;
       }
     })();
@@ -437,6 +435,11 @@ export class VimrcImpl {
   }
 
   private static async findDefaultVimrc(): Promise<string | undefined> {
+    const vscodeVimrcPath = path.join(os.homedir(), '.vscodevimrc');
+    if (await fs.existsAsync(vscodeVimrcPath)) {
+      return vscodeVimrcPath;
+    }
+
     let vimrcPath = path.join(os.homedir(), '.vimrc');
     if (await fs.existsAsync(vimrcPath)) {
       return vimrcPath;

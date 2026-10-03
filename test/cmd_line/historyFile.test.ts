@@ -1,10 +1,10 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
-import { HistoryFile } from '../../src/history/historyFile';
-import { setupWorkspace, cleanUpWorkspace, rndName, TestExtensionContext } from '../testUtils';
 import { configuration } from '../../src/configuration/configuration';
 import { Globals } from '../../src/globals';
+import { HistoryFile } from '../../src/history/historyFile';
+import { rndName, TestExtensionContext } from '../testUtils';
 
 suite('HistoryFile', () => {
   let history: HistoryFile;
@@ -18,8 +18,6 @@ suite('HistoryFile', () => {
   };
 
   setup(async () => {
-    await setupWorkspace();
-
     runCmds = [];
     for (let i = 0; i < configuration.history; i++) {
       runCmds.push(i.toString());
@@ -31,7 +29,6 @@ suite('HistoryFile', () => {
   });
 
   teardown(async () => {
-    await cleanUpWorkspace();
     history.clear();
   });
 

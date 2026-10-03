@@ -1,25 +1,44 @@
+import { oneOf, optWhitespace, Parser, seq } from 'parsimmon';
 import * as vscode from 'vscode';
+import { PositionDiff } from '../../common/motion/position';
+import { NumericString, NumericStringRadix } from '../../common/number/numericString';
 
 import { isVisualMode } from '../../mode/mode';
 import { VimState } from '../../state/vimState';
-import { TextEditor } from '../../textEditor';
-import * as node from '../node';
+import { ExCommand } from '../../vimscript/exCommand';
+import { LineRange } from '../../vimscript/lineRange';
+import { bangParser } from '../../vimscript/parserUtils';
 
-export interface ISortCommandArguments extends node.ICommandArgs {
+export interface ISortCommandArguments {
   reverse: boolean;
   ignoreCase: boolean;
   unique: boolean;
+  numeric: boolean;
+  // TODO: support other flags
+  // TODO(#6676): support pattern
 }
 
-export class SortCommand extends node.CommandBase {
-  private readonly arguments: ISortCommandArguments;
+export class SortCommand extends ExCommand {
+  public static readonly argParser: Parser<SortCommand> = seq(
+    bangParser,
+    optWhitespace.then(oneOf('bfilnorux').many()),
+  ).map(
+    ([bang, flags]) =>
+      new SortCommand({
+        reverse: bang,
+        ignoreCase: flags.includes('i'),
+        unique: flags.includes('u'),
+        numeric: flags.includes('n'),
+      }),
+  );
 
+  private readonly arguments: ISortCommandArguments;
   constructor(args: ISortCommandArguments) {
     super();
     this.arguments = args;
   }
 
-  public neovimCapable(): boolean {
+  public override neovimCapable(): boolean {
     return true;
   }
 
@@ -42,15 +61,34 @@ export class SortCommand extends node.CommandBase {
     ) {
       originalLines.push(vimState.document.lineAt(currentLine).text);
     }
-    if (this.arguments.unique) {
-      originalLines = [...new Set(originalLines)];
-    }
 
     const lastLineLength = originalLines[originalLines.length - 1].length;
 
-    const sortedLines = this.arguments.ignoreCase
-      ? originalLines.sort((a: string, b: string) => a.localeCompare(b))
-      : originalLines.sort();
+    if (this.arguments.unique) {
+      const seen = new Set<string>();
+      const uniqueLines: string[] = [];
+      for (const line of originalLines) {
+        const adjustedLine = this.arguments.ignoreCase ? line.toLowerCase() : line;
+        if (!seen.has(adjustedLine)) {
+          seen.add(adjustedLine);
+          uniqueLines.push(line);
+        }
+      }
+      originalLines = uniqueLines;
+    }
+
+    let sortedLines;
+    if (this.arguments.numeric) {
+      sortedLines = originalLines.sort(
+        (a: string, b: string) =>
+          (NumericString.parse(a, NumericStringRadix.Dec)?.num.value ?? Number.MAX_VALUE) -
+          (NumericString.parse(b, NumericStringRadix.Dec)?.num.value ?? Number.MAX_VALUE),
+      );
+    } else if (this.arguments.ignoreCase) {
+      sortedLines = originalLines.sort((a: string, b: string) => a.localeCompare(b));
+    } else {
+      sortedLines = originalLines.sort();
+    }
 
     if (this.arguments.reverse) {
       sortedLines.reverse();
@@ -58,15 +96,17 @@ export class SortCommand extends node.CommandBase {
 
     const sortedContent = sortedLines.join('\n');
 
-    await TextEditor.replace(
-      vimState.editor,
+    vimState.recordedState.transformer.replace(
       new vscode.Range(startLine, 0, endLine, lastLineLength),
-      sortedContent
+      sortedContent,
+      PositionDiff.exactPosition(
+        new vscode.Position(startLine, sortedLines[0].match(/\S/)?.index ?? 0),
+      ),
     );
   }
 
-  async executeWithRange(vimState: VimState, range: node.LineRange): Promise<void> {
-    const [start, end] = range.resolve(vimState);
+  override async executeWithRange(vimState: VimState, range: LineRange): Promise<void> {
+    const { start, end } = range.resolve(vimState);
 
     await this.sortLines(vimState, start, end);
   }

@@ -1,69 +1,66 @@
 import { Position } from 'vscode';
-import { Range } from '../common/motion/range';
+import { Cursor } from '../common/motion/cursor';
+import { isLiteralMode, unmapLiteral } from '../configuration/langmap';
 import { Notation } from '../configuration/notation';
 import { isTextTransformation } from '../transformations/transformations';
 import { configuration } from './../configuration/configuration';
 import { Mode } from './../mode/mode';
 import { VimState } from './../state/vimState';
+import { ActionType, IBaseAction } from './types';
 
-export abstract class BaseAction {
-  /**
-   * Can this action be paired with an operator (is it like w in dw)? All
-   * BaseMovements can be, and some more sophisticated commands also can be.
-   */
-  public isMotion = false;
+export abstract class BaseAction implements IBaseAction {
+  abstract readonly actionType: ActionType;
 
-  public isOperator = false;
-  public isCommand = false;
+  public readonly name: string | undefined;
 
   /**
    * If true, the cursor position will be added to the jump list on completion.
    */
-  public isJump = false;
+  public readonly isJump: boolean = false;
 
-  public canBeRepeatedWithDot = false;
+  /**
+   * If true, the action will create an undo point.
+   */
+  public readonly createsUndoPoint: boolean = false;
 
   /**
    * If this is being run in multi cursor mode, the index of the cursor
    * this action is being applied to.
    */
-  multicursorIndex: number | undefined = undefined;
+  public multicursorIndex: number | undefined;
 
   /**
    * Whether we should change `vimState.desiredColumn`
    */
-  public preservesDesiredColumn(): boolean {
-    return false;
-  }
+  public readonly preservesDesiredColumn: boolean = false;
 
   /**
    * Modes that this action can be run in.
    */
-  public abstract modes: Mode[];
+  public abstract readonly modes: readonly Mode[];
 
   /**
    * The sequence of keys you use to trigger the action, or a list of such sequences.
    */
-  public keys: string[] | string[][];
-
-  public mustBeFirstKey = false;
+  public abstract keys: readonly string[] | readonly string[][];
 
   /**
    * The keys pressed at the time that this action was triggered.
    */
+  // TODO: make readonly
   public keysPressed: string[] = [];
 
   private static readonly isSingleNumber: RegExp = /^[0-9]$/;
   private static readonly isSingleAlpha: RegExp = /^[a-zA-Z]$/;
+  private static readonly isMacroRegister: RegExp = /^[0-9a-zA-Z]$/;
 
   /**
    * Is this action valid in the current Vim state?
    */
   public doesActionApply(vimState: VimState, keysPressed: string[]): boolean {
     if (
-      this.mustBeFirstKey &&
-      (vimState.recordedState.commandWithoutCountPrefix.length > keysPressed.length ||
-        vimState.recordedState.operator)
+      vimState.currentModeIncludingPseudoModes === Mode.OperatorPendingMode &&
+      this.actionType === 'command'
     ) {
       return false;
     }
@@ -78,6 +75,13 @@ export abstract class BaseAction {
    * Could the user be in the process of doing this action.
    */
   public couldActionApply(vimState: VimState, keysPressed: string[]): boolean {
+    if (
+      vimState.currentModeIncludingPseudoModes === Mode.OperatorPendingMode &&
+      this.actionType === 'command'
+    ) {
+      return false;
+    }
+
     if (!this.modes.includes(vimState.currentMode)) {
       return false;
     }
@@ -88,18 +92,13 @@ export abstract class BaseAction {
       return false;
     }
 
-    if (
-      this.mustBeFirstKey &&
-      (vimState.recordedState.commandWithoutCountPrefix.length > keysPressed.length ||
-        vimState.recordedState.operator)
-    ) {
-      return false;
-    }
-
     return true;
   }
 
-  public static CompareKeypressSequence(one: string[] | string[][], two: string[]): boolean {
+  public static CompareKeypressSequence(
+    one: readonly string[] | readonly string[][],
+    two: readonly string[],
+  ): boolean {
     if (BaseAction.is2DArray(one)) {
       for (const sequence of one) {
         if (BaseAction.CompareKeypressSequence(sequence, two)) {
@@ -118,43 +117,21 @@ export abstract class BaseAction {
       const left = one[i];
       const right = two[j];
 
-      if (left === '<any>' || right === '<any>') {
+      if (left === right && right !== configuration.leader) {
         continue;
-      }
-
-      if (left === '<number>' && this.isSingleNumber.test(right)) {
+      } else if (left === '<any>') {
         continue;
-      }
-      if (right === '<number>' && this.isSingleNumber.test(left)) {
+      } else if (left === '<leader>' && right === configuration.leader) {
         continue;
-      }
-
-      if (left === '<alpha>' && this.isSingleAlpha.test(right)) {
+      } else if (left === '<number>' && this.isSingleNumber.test(right)) {
         continue;
-      }
-      if (right === '<alpha>' && this.isSingleAlpha.test(left)) {
+      } else if (left === '<alpha>' && this.isSingleAlpha.test(right)) {
         continue;
-      }
-
-      if (left === '<character>' && !Notation.IsControlKey(right)) {
+      } else if (left === '<macro>' && this.isMacroRegister.test(right)) {
         continue;
-      }
-      if (right === '<character>' && !Notation.IsControlKey(left)) {
+      } else if (['<character>', '<register>'].includes(left) && !Notation.IsControlKey(right)) {
         continue;
-      }
-
-      if (left === '<leader>' && right === configuration.leader) {
-        continue;
-      }
-      if (right === '<leader>' && left === configuration.leader) {
-        continue;
-      }
-
-      if (left === configuration.leader || right === configuration.leader) {
-        return false;
-      }
-
-      if (left !== right) {
+      } else {
         return false;
       }
     }
@@ -166,7 +143,7 @@ export abstract class BaseAction {
     return this.keys.join('');
   }
 
-  private static is2DArray<T>(x: T[] | T[][]): x is T[][] {
+  private static is2DArray<T>(x: readonly T[] | readonly T[][]): x is readonly T[][] {
     return Array.isArray(x[0]);
   }
 }
@@ -175,13 +152,13 @@ export abstract class BaseAction {
  * A command is something like <Esc>, :, v, i, etc.
  */
 export abstract class BaseCommand extends BaseAction {
-  isCommand = true;
+  override actionType: ActionType = 'command' as const;
 
   /**
    * If isCompleteAction is true, then triggering this command is a complete action -
    * that means that we'll go and try to run it.
    */
-  isCompleteAction = true;
+  public isCompleteAction = true;
 
   /**
    * In multi-cursor mode, do we run this command for every cursor, or just once?
@@ -196,9 +173,7 @@ export abstract class BaseCommand extends BaseAction {
    * If false, exec() will only be called once, and you are expected to
    * handle count prefixes (e.g. the 3 in 3w) yourself.
    */
-  runsOnceForEachCountPrefix = false;
-
-  canBeRepeatedWithDot = false;
+  public readonly runsOnceForEachCountPrefix: boolean = false;
 
   /**
    * Run the command a single time.
@@ -227,20 +202,17 @@ export abstract class BaseCommand extends BaseAction {
       return;
     }
 
-    const resultingCursors: Range[] = [];
+    const cursorsToIterateOver = [...vimState.cursors].sort((a, b) =>
+      a.start.line > b.start.line ||
+      (a.start.line === b.start.line && a.start.character > b.start.character)
+        ? 1
+        : -1,
+    );
 
-    const cursorsToIterateOver = vimState.cursors
-      .map((x) => new Range(x.start, x.stop))
-      .sort((a, b) =>
-        a.start.line > b.start.line ||
-        (a.start.line === b.start.line && a.start.character > b.start.character)
-          ? 1
-          : -1
-      );
+    const resultingCursors: Cursor[] = [];
 
-    let cursorIndex = 0;
-    for (const { start, stop } of cursorsToIterateOver) {
-      this.multicursorIndex = cursorIndex++;
+    for (const [index, { start, stop }] of cursorsToIterateOver.entries()) {
+      this.multicursorIndex = index;
 
       vimState.cursorStopPosition = stop;
       vimState.cursorStartPosition = start;
@@ -249,7 +221,7 @@ export abstract class BaseCommand extends BaseAction {
         await this.exec(stop, vimState);
       }
 
-      resultingCursors.push(new Range(vimState.cursorStartPosition, vimState.cursorStopPosition));
+      resultingCursors.push(new Cursor(vimState.cursorStartPosition, vimState.cursorStopPosition));
 
       for (const transformation of vimState.recordedState.transformer.transformations) {
         if (isTextTransformation(transformation) && transformation.cursorIndex === undefined) {
@@ -284,24 +256,26 @@ const actionMap = new Map<Mode, Array<new () => BaseAction>>();
  */
 export function getRelevantAction(
   keysPressed: string[],
-  vimState: VimState
+  vimState: VimState,
 ): BaseAction | KeypressState {
-  let isPotentialMatch = false;
+  const possibleActionsForMode = actionMap.get(vimState.currentMode) ?? [];
 
-  const possibleActionsForMode = actionMap.get(vimState.currentMode) || [];
+  let hasPotentialMatch = false;
   for (const actionType of possibleActionsForMode) {
+    // TODO: Constructing up to several hundred Actions every time we hit a key is moronic.
+    //       I think we can make `doesActionApply` and `couldActionApply` static...
     const action = new actionType();
     if (action.doesActionApply(vimState, keysPressed)) {
-      action.keysPressed = vimState.recordedState.actionKeys.slice(0);
+      action.keysPressed = isLiteralMode(vimState.currentMode)
+        ? [...vimState.recordedState.actionKeys]
+        : unmapLiteral(action.keys, vimState.recordedState.actionKeys);
       return action;
     }
 
-    if (action.couldActionApply(vimState, keysPressed)) {
-      isPotentialMatch = true;
-    }
+    hasPotentialMatch ||= action.couldActionApply(vimState, keysPressed);
   }
 
-  return isPotentialMatch ? KeypressState.WaitingOnKeys : KeypressState.NoPossibleMatch;
+  return hasPotentialMatch ? KeypressState.WaitingOnKeys : KeypressState.NoPossibleMatch;
 }
 
 export function RegisterAction(action: new () => BaseAction): void {

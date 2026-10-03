@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
-import { IConfiguration, IKeyRemapping } from '../iconfiguration';
-import { Notation } from '../notation';
-import { IConfigurationValidator, ValidatorResults } from '../iconfigurationValidator';
+import { PluginDefaultMappings } from '../../actions/plugins/pluginDefaultMappings';
 import { configurationValidator } from '../configurationValidator';
+import { IConfiguration, IKeyRemapping } from '../iconfiguration';
+import { IConfigurationValidator, ValidatorResults } from '../iconfigurationValidator';
+import { Notation } from '../notation';
 
 export class RemappingValidator implements IConfigurationValidator {
-  private commandMap: Map<string, boolean>;
+  private commandMap!: Map<string, boolean>;
 
   async validate(config: IConfiguration): Promise<ValidatorResults> {
     const result = new ValidatorResults();
@@ -22,15 +23,29 @@ export class RemappingValidator implements IConfigurationValidator {
       'commandLineModeKeyBindingsNonRecursive',
     ];
     for (const modeKeyBindingsKey of modeKeyBindingsKeys) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const keybindings = config[modeKeyBindingsKey];
-      const isRecursive = modeKeyBindingsKey.indexOf('NonRecursive') === -1;
+      // add default mappings for activated plugins
+      // because we process keybindings backwards in next loop, user mapping will override
+      for (const pluginMapping of PluginDefaultMappings.getPluginDefaultMappings(
+        modeKeyBindingsKey,
+        config,
+      )) {
+        // note concat(all mappings) does not work somehow
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        keybindings.push(pluginMapping);
+      }
+
+      const isRecursive = !modeKeyBindingsKey.includes('NonRecursive');
 
       const modeMapName = modeKeyBindingsKey.replace('NonRecursive', '');
       let modeKeyBindingsMap = config[modeMapName + 'Map'] as Map<string, IKeyRemapping>;
       if (!modeKeyBindingsMap) {
         modeKeyBindingsMap = new Map<string, IKeyRemapping>();
       }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       for (let i = keybindings.length - 1; i >= 0; i--) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         const remapping = keybindings[i] as IKeyRemapping;
 
         // set 'recursive' of the remapping according to where it was stored
@@ -41,6 +56,7 @@ export class RemappingValidator implements IConfigurationValidator {
         result.concat(remappingError);
         if (remappingError.hasError) {
           // errors with remapping, skip
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
           keybindings.splice(i, 1);
           continue;
         }
@@ -48,13 +64,13 @@ export class RemappingValidator implements IConfigurationValidator {
         // normalize
         if (remapping.before) {
           remapping.before.forEach(
-            (key, idx) => (remapping.before[idx] = Notation.NormalizeKey(key, config.leader))
+            (key, idx) => (remapping.before[idx] = Notation.NormalizeKey(key, config.leader)),
           );
         }
 
         if (remapping.after) {
           remapping.after.forEach(
-            (key, idx) => (remapping.after![idx] = Notation.NormalizeKey(key, config.leader))
+            (key, idx) => (remapping.after![idx] = Notation.NormalizeKey(key, config.leader)),
           );
         }
 
@@ -88,7 +104,7 @@ export class RemappingValidator implements IConfigurationValidator {
     if (!remapping.after && !remapping.commands) {
       result.append({
         level: 'error',
-        message: `${remapping.before} missing 'after' key or 'command'.`,
+        message: `${remapping.before} missing 'after' key or 'commands'.`,
       });
     }
 
@@ -148,7 +164,7 @@ export class RemappingValidator implements IConfigurationValidator {
   private async getCommandMap(): Promise<Map<string, boolean>> {
     if (this.commandMap == null) {
       this.commandMap = new Map(
-        (await vscode.commands.getCommands(true)).map((x) => [x, true] as [string, boolean])
+        (await vscode.commands.getCommands(true)).map((x) => [x, true] as [string, boolean]),
       );
     }
     return this.commandMap;

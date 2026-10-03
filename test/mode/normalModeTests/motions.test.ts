@@ -1,13 +1,53 @@
-import { cleanUpWorkspace, setupWorkspace } from './../../testUtils';
 import { Mode } from '../../../src/mode/mode';
 import { newTest, newTestSkip } from '../../testSimplifier';
+import { setupWorkspace } from './../../testUtils';
 
 suite('Motions in Normal Mode', () => {
-  setup(async () => {
-    await setupWorkspace();
-  });
+  suiteSetup(setupWorkspace);
 
-  teardown(cleanUpWorkspace);
+  suite('w', () => {
+    newTest({
+      title: 'w moves to next word',
+      start: ['one |two three four'],
+      keysPressed: 'w',
+      end: ['one two |three four'],
+    });
+
+    newTest({
+      title: 'w goes over all whitespace',
+      start: ['one |two \t  \t three four'],
+      keysPressed: 'w',
+      end: ['one two \t  \t |three four'],
+    });
+
+    newTest({
+      title: 'w stops at punctuation',
+      start: ['one |two,.;/three four'],
+      keysPressed: 'w',
+      end: ['one two|,.;/three four'],
+    });
+
+    newTest({
+      title: 'w on punctuation jumps over punctuation',
+      start: ['one two|,.;/three four'],
+      keysPressed: 'w',
+      end: ['one two,.;/|three four'],
+    });
+
+    newTest({
+      title: 'w goes over EOL',
+      start: ['o|ne  ', '  two three'],
+      keysPressed: 'w',
+      end: ['one  ', '  |two three'],
+    });
+
+    newTest({
+      title: '[count]w',
+      start: ['|one two three four'],
+      keysPressed: '2w',
+      end: ['one two |three four'],
+    });
+  });
 
   newTest({
     title: 'Can handle [(',
@@ -94,6 +134,13 @@ suite('Motions in Normal Mode', () => {
   });
 
   newTest({
+    title: 'Can handle 99[{ (past start of file)',
+    start: ['{{{|()}}}'],
+    keysPressed: '99[{',
+    end: ['|{{{()}}}'],
+  });
+
+  newTest({
     title: 'Can handle ]}',
     start: ['{(|)}'],
     keysPressed: ']}',
@@ -119,6 +166,13 @@ suite('Motions in Normal Mode', () => {
     start: ['{{()|}}'],
     keysPressed: ']}',
     end: ['{{()}|}'],
+  });
+
+  newTest({
+    title: 'Can handle 99]} (past end of file)',
+    start: ['{{{|()}}}'],
+    keysPressed: '99]}',
+    end: ['{{{()}}|}'],
   });
 
   newTest({
@@ -424,10 +478,19 @@ suite('Motions in Normal Mode', () => {
   });
 
   newTest({
-    title: 'Can run a forward search with count exceeding max number of matches',
+    title: 'Can run a forward search with count exceeding max number of matches and wrapscan',
     start: ['|one two two two'],
     keysPressed: '5/tw\n',
     end: ['one two |two two'],
+  });
+
+  newTest({
+    title: 'Can run a forward search with count exceeding max number of matches and nowrapscan',
+    config: { wrapscan: false },
+    start: ['|one two two two'],
+    keysPressed: '5/tw\n',
+    end: ['|one two two two'],
+    statusBar: 'E385: Search hit BOTTOM without match for: tw',
   });
 
   // These "remembering history between editor" tests have started
@@ -662,135 +725,154 @@ suite('Motions in Normal Mode', () => {
     end: ['blah blah |blah'],
   });
 
-  newTest({
-    title: 'Can handle g*',
-    start: ['|blah duh blahblah duh blah'],
-    keysPressed: 'g*',
-    end: ['blah duh |blahblah duh blah'],
-  });
+  for (const config of [{ visualstar: true }, { visualstar: false }]) {
+    newTest({
+      title: 'Can handle g*',
+      config,
+      start: ['|blah duh blahblah duh blah'],
+      keysPressed: 'g*',
+      end: ['blah duh |blahblah duh blah'],
+    });
 
-  newTest({
-    title: 'Can handle g*n',
-    start: ['|blah duh blahblah duh blah'],
-    keysPressed: 'g*n',
-    end: ['blah duh blah|blah duh blah'],
-  });
+    newTest({
+      title: 'Can handle g*n',
+      config,
+      start: ['|blah duh blahblah duh blah'],
+      keysPressed: 'g*n',
+      end: ['blah duh blah|blah duh blah'],
+    });
 
-  newTest({
-    title: 'Can handle *',
-    start: ['|blah blahblah duh blah blah'],
-    keysPressed: '*',
-    end: ['blah blahblah duh |blah blah'],
-  });
+    newTest({
+      title: 'Can handle *',
+      config,
+      start: ['|blah blahblah duh blah blah'],
+      keysPressed: '*',
+      end: ['blah blahblah duh |blah blah'],
+    });
 
-  newTest({
-    title: 'Can handle **',
-    start: ['|blah duh blah duh blah'],
-    keysPressed: '**',
-    end: ['blah duh blah duh |blah'],
-  });
+    newTest({
+      title: 'Can handle **',
+      config,
+      start: ['|blah duh blah duh blah'],
+      keysPressed: '**',
+      end: ['blah duh blah duh |blah'],
+    });
 
-  newTest({
-    title: '* ignores smartcase (ignorecase=true)',
-    config: { ignorecase: true, smartcase: true },
-    start: ['|test TEST test'],
-    keysPressed: '*',
-    end: ['test |TEST test'],
-  });
+    newTest({
+      title: '* ignores smartcase (ignorecase=true)',
+      config: { ignorecase: true, smartcase: true, ...config },
+      start: ['|test TEST test'],
+      keysPressed: '*',
+      end: ['test |TEST test'],
+    });
 
-  newTest({
-    title: '* ignores smartcase (ignorecase=false)',
-    config: { ignorecase: false, smartcase: true },
-    start: ['|test TEST test'],
-    keysPressed: '*',
-    end: ['test TEST |test'],
-  });
+    newTest({
+      title: '* ignores smartcase (ignorecase=false)',
+      config: { ignorecase: false, smartcase: true, ...config },
+      start: ['|test TEST test'],
+      keysPressed: '*',
+      end: ['test TEST |test'],
+    });
 
-  newTest({
-    title: '* skips over word separators',
-    start: ['const x| = 2 + 2;'],
-    // TODO: this should only require a single *
-    keysPressed: '**',
-    end: ['const x = 2 + |2;'],
-  });
+    newTest({
+      title: '* skips over word separators',
+      config,
+      start: ['const x| = 2 + 2;'],
+      // TODO: this should only require a single *
+      keysPressed: '**',
+      end: ['const x = 2 + |2;'],
+    });
 
-  newTest({
-    title: '* uses word separator if no word characters found before EOL',
-    start: ['if (x === 2)| {', '  if (y === 3) {'],
-    // TODO: this should only require a single *
-    keysPressed: '**',
-    end: ['if (x === 2) {', '  if (y === 3) |{'],
-  });
+    newTest({
+      title: '* uses word separator if no word characters found before EOL',
+      config,
+      start: ['if (x === 2)| {', '  if (y === 3) {'],
+      // TODO: this should only require a single *
+      keysPressed: '**',
+      end: ['if (x === 2) {', '  if (y === 3) |{'],
+    });
 
-  newTest({
-    title: '* does not go over line boundaries',
-    start: ['one  |   ', 'one two one two'],
-    keysPressed: '*',
-    end: ['one  |   ', 'one two one two'],
-  });
+    newTest({
+      title: '* does not go over line boundaries',
+      config,
+      start: ['one  |   ', 'one two one two'],
+      keysPressed: '*',
+      end: ['one  |   ', 'one two one two'],
+      statusBar: 'E348: No string under cursor',
+    });
 
-  newTest({
-    title: 'Can handle # on whitespace',
-    start: ['abc abcdef| abc'],
-    keysPressed: '#',
-    end: ['|abc abcdef abc'],
-  });
+    newTest({
+      title: 'Can handle # on whitespace',
+      config,
+      start: ['abc abcdef| abc'],
+      keysPressed: '#',
+      end: ['|abc abcdef abc'],
+    });
 
-  newTest({
-    title: 'Can handle # on EOL',
-    start: ['abc abcdef abc| '],
-    keysPressed: '#',
-    end: ['abc abcdef abc| '],
-  });
+    newTest({
+      title: 'Can handle # on EOL',
+      config,
+      start: ['abc abcdef abc| '],
+      keysPressed: '#',
+      end: ['abc abcdef abc| '],
+    });
 
-  newTest({
-    title: 'Can handle g#',
-    start: ['blah duh blahblah duh |blah'],
-    keysPressed: 'g#',
-    end: ['blah duh blah|blah duh blah'],
-  });
+    newTest({
+      title: 'Can handle g#',
+      config,
+      start: ['blah duh blahblah duh |blah'],
+      keysPressed: 'g#',
+      end: ['blah duh blah|blah duh blah'],
+    });
 
-  newTest({
-    title: 'Can handle g#n',
-    start: ['blah duh blahblah duh |blah'],
-    keysPressed: 'g#n',
-    end: ['blah duh |blahblah duh blah'],
-  });
+    newTest({
+      title: 'Can handle g#n',
+      config,
+      start: ['blah duh blahblah duh |blah'],
+      keysPressed: 'g#n',
+      end: ['blah duh |blahblah duh blah'],
+    });
 
-  newTest({
-    title: 'Can handle #',
-    start: ['blah blah blahblah duh |blah'],
-    keysPressed: '#',
-    end: ['blah |blah blahblah duh blah'],
-  });
+    newTest({
+      title: 'Can handle #',
+      config,
+      start: ['blah blah blahblah duh |blah'],
+      keysPressed: '#',
+      end: ['blah |blah blahblah duh blah'],
+    });
 
-  newTest({
-    title: 'Can handle # already on the word',
-    start: ['one o|ne'],
-    keysPressed: '#',
-    end: ['|one one'],
-  });
+    newTest({
+      title: 'Can handle # already on the word',
+      config,
+      start: ['one o|ne'],
+      keysPressed: '#',
+      end: ['|one one'],
+    });
 
-  newTest({
-    title: 'Can handle ##',
-    start: ['blah duh blah duh |blah'],
-    keysPressed: '##',
-    end: ['|blah duh blah duh blah'],
-  });
+    newTest({
+      title: 'Can handle ##',
+      config,
+      start: ['blah duh blah duh |blah'],
+      keysPressed: '##',
+      end: ['|blah duh blah duh blah'],
+    });
 
-  // These tests take advantage of the fact that an empty search repeats the last search
-  newTest({
-    title: '* adds to search history',
-    start: ['|ONE two three ONE two three four ONE'],
-    keysPressed: '*/\n',
-    end: ['ONE two three ONE two three four |ONE'],
-  });
-  newTest({
-    title: '# adds to search history',
-    start: ['ONE two three ONE two three four |ONE'],
-    keysPressed: '#?\n',
-    end: ['|ONE two three ONE two three four ONE'],
-  });
+    // These tests take advantage of the fact that an empty search repeats the last search
+    newTest({
+      title: '* adds to search history',
+      config,
+      start: ['|ONE two three ONE two three four ONE'],
+      keysPressed: '*/\n',
+      end: ['ONE two three ONE two three four |ONE'],
+    });
+    newTest({
+      title: '# adds to search history',
+      config,
+      start: ['ONE two three ONE two three four |ONE'],
+      keysPressed: '#?\n',
+      end: ['|ONE two three ONE two three four ONE'],
+    });
+  }
 
   newTest({
     title: 'Can handle |',
@@ -876,6 +958,33 @@ suite('Motions in Normal Mode', () => {
     end: ['blah', 'duh', 'dur', 'hu|r'],
   });
 
+  suite('`go` motion', () => {
+    newTest({
+      title: '`go` without count goes to start of document',
+      start: ['abc', 'de|f', 'ghi'],
+      keysPressed: 'go',
+      end: ['|abc', 'def', 'ghi'],
+    });
+
+    newTest({
+      title: '`[count]go` goes to offset <count>',
+      start: ['abc', 'de|f', 'ghi'],
+      keysPressed: '3go',
+      end: ['ab|c', 'def', 'ghi'],
+    });
+
+    // TODO(#4844): this fails on Windows due to \r\n
+    newTestSkip(
+      {
+        title: '`[count]go` goes to offset <count>, newlines disregarded',
+        start: ['abc', 'de|f', 'ghi'],
+        keysPressed: '10go',
+        end: ['abc', 'def', 'g|hi'],
+      },
+      process.platform === 'win32',
+    );
+  });
+
   newTest({
     title: 'Can handle <up> key',
     start: ['blah', 'duh', '|dur', 'hur'],
@@ -932,6 +1041,20 @@ suite('Motions in Normal Mode', () => {
     end: ['blah', 'duh', 'a', 'hu|r '],
   });
 
+  newTest({
+    title: 'special treatment of curly braces',
+    start: ['{', '|    {  {  }   }   ', '}'],
+    keysPressed: 'di{',
+    end: ['{', '    {|}   ', '}'],
+  });
+
+  newTest({
+    title: 'no special treatment of curly braces if any other character is present',
+    start: ['{', 'a  |  {  {  }   }   ', '}'],
+    keysPressed: 'di{',
+    end: ['{', '|}'],
+  });
+
   suite("doesn't update desiredColumn when it shouldn't", () => {
     newTest({
       title: 'Preserves desired cursor position when pressing zz',
@@ -969,6 +1092,15 @@ suite('Motions in Normal Mode', () => {
     });
 
     newTest({
+      title: 'Preserves desired cursor position when starting, but not completing, operator',
+      start: ['short line', 'very long line of text....|.'],
+      keysPressed: 'k' + 'd<Esc>' + 'j',
+      end: ['short line', 'very long line of text....|.'],
+    });
+  });
+
+  suite('Special marks', () => {
+    newTest({
       title: 'Jump to visual start `<',
       start: ['one |Xx two three'],
       keysPressed: 'v2ev`<',
@@ -994,6 +1126,62 @@ suite('Motions in Normal Mode', () => {
       start: ['|one', '  Xxx', 'two', '  three'],
       keysPressed: "vjv1G'>",
       end: ['one', '  |Xxx', 'two', '  three'],
+    });
+
+    newTest({
+      title: 'Jump to visual line start `<',
+      start: ['one', 't|wo', 'three', 'four'],
+      keysPressed: 'Vj<Esc>' + 'gg' + '`<',
+      end: ['one', '|two', 'three', 'four'],
+    });
+
+    newTest({
+      title: 'Jump to visual line end `>',
+      start: ['one', 't|wo', 'three', 'four'],
+      keysPressed: 'Vj<Esc>' + 'gg' + '`>',
+      end: ['one', 'two', 'thre|e', 'four'],
+    });
+
+    newTest({
+      title: '`] go to the end of the previously operated or put text',
+      start: ['hello|'],
+      keysPressed: 'a world<Esc>`]',
+      end: ['hello worl|d'],
+    });
+
+    newTest({
+      title: "'] go to the end of the previously operated or put text",
+      start: ['hello|'],
+      keysPressed: "a world<Esc>']",
+      end: ['|hello world'],
+    });
+
+    newTest({
+      title: '`[ go to the start of the previously operated or put text',
+      start: ['hello|'],
+      keysPressed: 'a world<Esc>`[',
+      end: ['hello| world'],
+    });
+
+    newTest({
+      title: "'[ go to the start of the previously operated or put text",
+      start: ['hello|'],
+      keysPressed: "a world<Esc>'[",
+      end: ['|hello world'],
+    });
+
+    newTest({
+      title: '`. works correctly',
+      start: ['on|e'],
+      keysPressed: 'atwo<Esc>`.',
+      end: ['one|two'],
+    });
+
+    newTest({
+      title: "'. works correctly",
+      start: ['on|e'],
+      keysPressed: "atwo<Esc>'.",
+      end: ['|onetwo'],
     });
   });
 });

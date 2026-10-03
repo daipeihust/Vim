@@ -1,24 +1,31 @@
+import * as process from 'process';
 import * as vscode from 'vscode';
 import { Globals } from '../globals';
-import { Notation } from './notation';
-import { ValidatorResults } from './iconfigurationValidator';
 import { VSCodeContext } from '../util/vscodeContext';
 import { configurationValidator } from './configurationValidator';
 import { decoration } from './decoration';
-import * as process from 'process';
+import { ValidatorResults } from './iconfigurationValidator';
+import { Notation } from './notation';
 
 import {
+  Digraph,
+  IAutoSwitchInputMethod,
+  ICamelCaseMotionConfiguration,
   IConfiguration,
+  IHighlightedYankConfiguration,
   IKeyRemapping,
   IModeSpecificStrings,
-  IAutoSwitchInputMethod,
-  IDebugConfiguration,
-  IHighlightedYankConfiguration,
-  ICamelCaseMotionConfiguration,
+  ITargetsConfiguration,
 } from './iconfiguration';
 
-import * as packagejson from '../../package.json';
 import { SUPPORT_VIMRC } from 'platform/constants';
+import * as packagejson from '../../package.json';
+import { Mode } from '../mode/mode';
+
+// https://stackoverflow.com/questions/51465182/how-to-remove-index-signature-using-mapped-types/51956054#51956054
+type RemoveIndex<T> = {
+  [P in keyof T as string extends P ? never : number extends P ? never : P]: T[P];
+};
 
 export const extensionVersion = packagejson.version;
 
@@ -27,20 +34,24 @@ export const extensionVersion = packagejson.version;
  * Please keep this list up to date and sorted alphabetically.
  */
 export const optionAliases: ReadonlyMap<string, string> = new Map<string, string>([
+  ['top', 'tildeop'],
   ['ai', 'autoindent'],
   ['et', 'expandtab'],
   ['gd', 'gdefault'],
   ['hi', 'history'],
   ['hls', 'hlsearch'],
   ['ic', 'ignorecase'],
+  ['icm', 'inccommand'],
   ['is', 'incsearch'],
   ['isk', 'iskeyword'],
   ['js', 'joinspaces'],
   ['mmd', 'maxmapdepth'],
+  ['mps', 'matchpairs'],
   ['nu', 'number'],
   ['rnu', 'relativenumber'],
   ['sc', 'showcmd'],
   ['scr', 'scroll'],
+  ['so', 'scrolloff'],
   ['scs', 'smartcase'],
   ['smd', 'showmode'],
   ['sol', 'startofline'],
@@ -89,8 +100,10 @@ interface IKeyBinding {
  *
  */
 class Configuration implements IConfiguration {
+  [key: string]: any;
+
   private readonly leaderDefault = '\\';
-  private readonly cursorTypeMap = {
+  private readonly cursorTypeMap: { [key: string]: vscode.TextEditorCursorStyle } = {
     line: vscode.TextEditorCursorStyle.Line,
     block: vscode.TextEditorCursorStyle.Block,
     underline: vscode.TextEditorCursorStyle.Underline,
@@ -99,18 +112,27 @@ class Configuration implements IConfiguration {
     'underline-thin': vscode.TextEditorCursorStyle.UnderlineThin,
   };
 
+  private loadListeners: Array<() => void> = [];
+  public addLoadListener(listener: () => void): void {
+    this.loadListeners.push(listener);
+  }
+
   public async load(): Promise<ValidatorResults> {
     const vimConfigs: { [key: string]: any } = Globals.isTesting
       ? Globals.mockConfiguration
       : this.getConfiguration('vim');
 
-    // tslint:disable-next-line: forin
+    // eslint-disable-next-line guard-for-in
     for (const option in this) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       let val = vimConfigs[option];
       if (val !== null && val !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (val.constructor.name === Object.name) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
           val = Configuration.unproxify(val);
         }
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         this[option] = val;
       }
     }
@@ -173,16 +195,20 @@ class Configuration implements IConfiguration {
         }
       }
 
-      VSCodeContext.set(`vim.use${boundKey.key}`, useKey);
+      void VSCodeContext.set(`vim.use${boundKey.key}`, useKey);
     }
 
-    VSCodeContext.set('vim.overrideCopy', this.overrideCopy);
-    VSCodeContext.set('vim.overrideCtrlC', this.overrideCopy || this.useCtrlKeys);
+    void VSCodeContext.set('vim.overrideCopy', this.overrideCopy);
+    void VSCodeContext.set('vim.overrideCtrlC', this.overrideCopy || this.useCtrlKeys);
+
+    // workaround for circular dependency that would
+    // prevent packaging if we simply called `updateLangmap(configuration.langmap);`
+    this.loadListeners.forEach((listener) => listener());
 
     return validatorResults;
   }
 
-  getConfiguration(section: string = ''): vscode.WorkspaceConfiguration {
+  getConfiguration(section: string = ''): RemoveIndex<vscode.WorkspaceConfiguration> {
     const document = vscode.window.activeTextEditor?.document;
     const resource = document ? { uri: document.uri, languageId: document.languageId } : undefined;
     return vscode.workspace.getConfiguration(section, resource);
@@ -201,15 +227,17 @@ class Configuration implements IConfiguration {
     this.operatorPendingModeKeyBindingsMap = new Map<string, IKeyRemapping>();
   }
 
-  handleKeys: IHandleKeys[] = [];
+  tildeop = false;
+
+  handleKeys: IHandleKeys = {};
 
   useSystemClipboard = false;
+
+  shell = '';
 
   useCtrlKeys = false;
 
   overrideCopy = true;
-
-  textwidth = 80;
 
   hlsearch = false;
 
@@ -218,6 +246,8 @@ class Configuration implements IConfiguration {
   smartcase = true;
 
   autoindent = true;
+
+  matchpairs = '(:),{:},[:]';
 
   joinspaces = true;
 
@@ -242,19 +272,28 @@ class Configuration implements IConfiguration {
   easymotion = false;
   easymotionMarkerBackgroundColor = '#0000';
   easymotionMarkerForegroundColorOneChar = '#ff0000';
-  easymotionMarkerForegroundColorTwoChar = '#ffa500'; // Deprecated! Use the ones bellow
   easymotionMarkerForegroundColorTwoCharFirst = '#ffb400';
   easymotionMarkerForegroundColorTwoCharSecond = '#b98300';
   easymotionIncSearchForegroundColor = '#7fbf00';
   easymotionDimColor = '#777777';
-  easymotionMarkerWidthPerChar = 8; // Deprecated! No longer needed!
   easymotionDimBackground = true;
-  easymotionMarkerFontFamily = 'Consolas'; // Deprecated! No longer needed!
-  easymotionMarkerFontSize = '14'; // Deprecated! No longer needed!
   easymotionMarkerFontWeight = 'bold';
-  easymotionMarkerMargin = 0; // Deprecated! No longer needed!
   easymotionKeys = 'hklyuiopnm,qwertzxcvbasdgjf;';
   easymotionJumpToAnywhereRegex = '\\b[A-Za-z0-9]|[A-Za-z0-9]\\b|_.|#.|[a-z][A-Z]';
+
+  targets: ITargetsConfiguration = {
+    enable: false,
+
+    bracketObjects: {
+      enable: true,
+    },
+
+    smartQuotes: {
+      enable: false,
+      breakThroughLines: false,
+      aIncludesSurroundingSpaces: true,
+    },
+  };
 
   autoSwitchInputMethod: IAutoSwitchInputMethod = {
     enable: false,
@@ -275,29 +314,33 @@ class Configuration implements IConfiguration {
 
   history = 50;
 
+  inccommand: '' | 'append' | 'replace' = '';
+
   incsearch = true;
 
   startInInsertMode = false;
 
+  startInInsertModeSchemes: string[] = ['comment'];
+
   statusBarColorControl = false;
 
   statusBarColors: IModeSpecificStrings<string | string[]> = {
-    normal: '#005f5f',
-    insert: '#5f0000',
-    visual: '#5f00af',
-    visualline: '#005f87',
-    visualblock: '#86592d',
-    replace: '#000000',
-  };
-
-  debug: IDebugConfiguration = {
-    silent: false,
-    loggingLevelForAlert: 'error',
-    loggingLevelForConsole: 'error',
+    normal: ['#005f5f', '#ffffff'],
+    insert: ['#5f0000', '#ffffff'],
+    visual: ['#5f00af', '#ffffff'],
+    visualline: ['#005f87', '#ffffff'],
+    visualblock: ['#86592d', '#ffffff'],
+    replace: ['#000000', '#ffffff'],
   };
 
   searchHighlightColor = '';
   searchHighlightTextColor = '';
+
+  searchMatchColor = '';
+  searchMatchTextColor = '';
+
+  substitutionColor = '#50f01080';
+  substitutionTextColor = '';
 
   highlightedyank: IHighlightedYankConfiguration = {
     enable: false,
@@ -307,10 +350,10 @@ class Configuration implements IConfiguration {
   };
 
   @overlapSetting({ settingName: 'tabSize', defaultValue: 8 })
-  tabstop: number;
+  tabstop!: number;
 
   @overlapSetting({ settingName: 'cursorStyle', defaultValue: 'line' })
-  private editorCursorStyleRaw: string;
+  private editorCursorStyleRaw!: string;
 
   get editorCursorStyle(): vscode.TextEditorCursorStyle | undefined {
     return this.cursorStyleFromString(this.editorCursorStyleRaw);
@@ -320,7 +363,7 @@ class Configuration implements IConfiguration {
   }
 
   @overlapSetting({ settingName: 'insertSpaces', defaultValue: false })
-  expandtab: boolean;
+  expandtab!: boolean;
 
   @overlapSetting({
     settingName: 'lineNumbers',
@@ -332,7 +375,8 @@ class Configuration implements IConfiguration {
       ['interval', false],
     ]),
   })
-  number: boolean;
+  // eslint-disable-next-line id-denylist
+  number!: boolean;
 
   @overlapSetting({
     settingName: 'lineNumbers',
@@ -344,13 +388,13 @@ class Configuration implements IConfiguration {
       ['interval', false],
     ]),
   })
-  relativenumber: boolean;
+  relativenumber!: boolean;
 
   @overlapSetting({
     settingName: 'wordSeparators',
     defaultValue: '/\\()"\':,.;<>~!@#$%^&*|+=[]{}`?-',
   })
-  iskeyword: string;
+  iskeyword!: string;
 
   @overlapSetting({
     settingName: 'wordWrap',
@@ -362,7 +406,13 @@ class Configuration implements IConfiguration {
       ['bounded', true],
     ]),
   })
-  wrap: boolean;
+  wrap!: boolean;
+
+  @overlapSetting({
+    settingName: 'cursorSurroundingLines',
+    defaultValue: 0,
+  })
+  scrolloff!: number;
 
   boundKeyCombinations: IKeyBinding[] = [];
 
@@ -386,7 +436,7 @@ class Configuration implements IConfiguration {
     path: '',
   };
 
-  digraphs = {};
+  digraphs: { [shortcut: string]: Digraph } = {};
 
   gdefault = false;
   substituteGlobalFlag = false; // Deprecated in favor of gdefault
@@ -416,13 +466,11 @@ class Configuration implements IConfiguration {
     replace: undefined,
   };
 
-  getCursorStyleForMode(modeName: string): vscode.TextEditorCursorStyle | undefined {
-    const cursorStyle = this.cursorStylePerMode[modeName.toLowerCase()];
-    if (cursorStyle) {
-      return this.cursorStyleFromString(cursorStyle);
-    }
-
-    return;
+  getCursorStyleForMode(mode: Mode): vscode.TextEditorCursorStyle | undefined {
+    const cursorStyle = (this.cursorStylePerMode as unknown as Record<string, string | undefined>)[
+      Mode[mode].toLowerCase()
+    ];
+    return cursorStyle ? this.cursorStyleFromString(cursorStyle) : undefined;
   }
 
   // remappings
@@ -437,18 +485,35 @@ class Configuration implements IConfiguration {
   commandLineModeKeyBindings: IKeyRemapping[] = [];
   commandLineModeKeyBindingsNonRecursive: IKeyRemapping[] = [];
 
-  insertModeKeyBindingsMap: Map<string, IKeyRemapping>;
-  normalModeKeyBindingsMap: Map<string, IKeyRemapping>;
-  operatorPendingModeKeyBindingsMap: Map<string, IKeyRemapping>;
-  visualModeKeyBindingsMap: Map<string, IKeyRemapping>;
-  commandLineModeKeyBindingsMap: Map<string, IKeyRemapping>;
+  insertModeKeyBindingsMap: Map<string, IKeyRemapping> = new Map();
+  normalModeKeyBindingsMap: Map<string, IKeyRemapping> = new Map();
+  operatorPendingModeKeyBindingsMap: Map<string, IKeyRemapping> = new Map();
+  visualModeKeyBindingsMap: Map<string, IKeyRemapping> = new Map();
+  commandLineModeKeyBindingsMap: Map<string, IKeyRemapping> = new Map();
 
-  private static unproxify(obj: object): object {
-    const result = {};
-    // tslint:disable-next-line: forin
+  // langmap
+  langmapBindingsMap: Map<string, string> = new Map();
+  langmapReverseBindingsMap: Map<string, string> = new Map();
+  langmap = '';
+
+  get textwidth(): number {
+    const textwidth = this.getConfiguration('vim').get('textwidth', 80);
+
+    if (typeof textwidth !== 'number') {
+      return 80;
+    }
+
+    return textwidth;
+  }
+
+  private static unproxify(obj: { [key: string]: any }): object {
+    const result: { [key: string]: any } = {};
+    // eslint-disable-next-line guard-for-in
     for (const key in obj) {
-      const val = obj[key] as any;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const val = obj[key];
       if (val !== null && val !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         result[key] = val;
       }
     }
@@ -469,20 +534,26 @@ function overlapSetting(args: {
         // if the value is not defined or empty
         // look at the equivalent `editor` setting
         // if that is not defined then defer to the default value
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         let val = this['_' + propertyKey];
         if (val !== undefined && val !== '') {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-return
           return val;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         val = this.getConfiguration('editor').get(args.settingName, args.defaultValue);
         if (args.map && val !== undefined) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
           val = args.map.get(val);
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return val;
       },
       set(value) {
         // synchronize the vim setting with the `editor` equivalent
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         this['_' + propertyKey] = value;
 
         if (value === undefined || value === '' || Globals.isTesting) {
@@ -499,10 +570,11 @@ function overlapSetting(args: {
         }
 
         // update configuration asynchronously
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         this.getConfiguration('editor').update(
           args.settingName,
           value,
-          vscode.ConfigurationTarget.Global
+          vscode.ConfigurationTarget.Global,
         );
       },
       enumerable: true,
